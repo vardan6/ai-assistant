@@ -25,6 +25,7 @@ const dom = {
   composerForm: document.querySelector("#composer-form"),
   sendButton: document.querySelector("#send-button"),
   traceVisibilityNote: document.querySelector("#trace-visibility-note"),
+  activeSessionMeta: document.querySelector("#active-session-meta"),
   tabButtons: Array.from(document.querySelectorAll(".tab")),
   views: {
     chat: document.querySelector("#view-chat"),
@@ -81,6 +82,7 @@ function wireEvents() {
     });
   });
   dom.addProviderButton.addEventListener("click", () => {
+    syncProviderDraftsFromDom();
     state.providers.push(makeBlankProvider());
     renderProviderSettings();
   });
@@ -114,6 +116,7 @@ async function initialize() {
   renderProviderSettings();
   renderUISettings();
   updateTraceNote();
+  updateActiveSessionMeta();
   updateComposerState();
 
   if (state.sessions.length > 0) {
@@ -165,6 +168,7 @@ async function createSession(focusChat = false) {
   state.sessionId = session.id;
   state.messages = [];
   renderSessions();
+  updateActiveSessionMeta();
   renderMessages();
   if (focusChat) {
     setView("chat");
@@ -184,7 +188,9 @@ async function openSession(sessionId) {
     created_at: message.created_at || "",
   }));
   renderSessions();
+  updateActiveSessionMeta();
   renderMessages();
+  setStatus(`Opened "${session.title || "New chat"}"`);
 }
 
 function renderMessages() {
@@ -272,6 +278,9 @@ function renderProviderControls() {
     option.textContent = `${provider.display_name} (${provider.model_id})`;
     dom.providerSelect.appendChild(option);
   });
+  if (state.selectedProviderId && !state.providers.some((provider) => provider.id === state.selectedProviderId)) {
+    state.selectedProviderId = "";
+  }
   dom.providerSelect.value = state.selectedProviderId;
   dom.gatingSelect.value = state.gatingMode;
 }
@@ -289,6 +298,7 @@ function renderProviderSettings() {
     const wrapper = document.createElement("section");
     wrapper.className = "provider-card";
     wrapper.dataset.index = String(index);
+    wrapper.dataset.hasSecret = String(Boolean(provider.has_secret));
     wrapper.innerHTML = `
       <div class="provider-card-head">
         <div>
@@ -364,6 +374,7 @@ function handleProviderAction(event, wrapper) {
   if (!actionButton) {
     return;
   }
+  syncProviderDraftsFromDom();
   const index = Number(wrapper.dataset.index);
   if (actionButton.dataset.action === "remove-provider") {
     state.providers.splice(index, 1);
@@ -438,6 +449,12 @@ async function saveSingleSecret(wrapper) {
     method: "PUT",
     body: JSON.stringify({ value }),
   });
+  const index = Number(wrapper.dataset.index);
+  if (Number.isInteger(index) && state.providers[index]) {
+    state.providers[index].has_secret = true;
+  }
+  wrapper.querySelector('[data-field="secret_value"]').value = "";
+  renderProviderSettings();
   setStatus(`Stored secret for ${provider.id || provider.display_name}`);
 }
 
@@ -449,6 +466,12 @@ async function clearSingleSecret(wrapper) {
   await api(`/api/settings/secrets/${encodeURIComponent(provider.secret_ref)}`, {
     method: "DELETE",
   });
+  const index = Number(wrapper.dataset.index);
+  if (Number.isInteger(index) && state.providers[index]) {
+    state.providers[index].has_secret = false;
+  }
+  wrapper.querySelector('[data-field="secret_value"]').value = "";
+  renderProviderSettings();
   setStatus(`Cleared secret for ${provider.id || provider.display_name}`);
 }
 
@@ -485,51 +508,66 @@ async function sendMessage() {
   state.messages.push(userMessage, assistantMessage);
   renderMessages();
   dom.questionInput.value = "";
+  try {
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        session_id: state.sessionId,
+        provider_id: state.selectedProviderId,
+        gating_mode: state.gatingMode,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Request failed with ${response.status}`);
+    }
 
-  const response = await fetch("/api/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      question,
-      session_id: state.sessionId,
-      provider_id: state.selectedProviderId,
-      gating_mode: state.gatingMode,
-    }),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed with ${response.status}`);
+    await consumeNdjson(response, (event) => {
+      if (event.type === "trace") {
+        assistantMessage.content = "Working through the request...";
+        assistantMessage.metadata.trace_events.push(event.event);
+        renderMessages();
+        return;
+      }
+      if (event.type === "final") {
+        assistantMessage.content = event.response.answer || "";
+        assistantMessage.metadata = event.response;
+        renderMessages();
+        return;
+      }
+      if (event.type === "error") {
+        assistantMessage.content = `Error: ${event.error}`;
+        assistantMessage.metadata = {
+          ...assistantMessage.metadata,
+          error: event.error,
+        };
+        renderMessages();
+      }
+    });
+    setStatus("Reply complete");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assistantMessage.content = `Error: ${message}`;
+    assistantMessage.metadata = {
+      ...assistantMessage.metadata,
+      error: message,
+    };
+    renderMessages();
+    throw error;
+  } finally {
+    state.isSending = false;
+    updateComposerState();
+    await refreshSessions();
   }
-
-  await consumeNdjson(response, (event) => {
-    if (event.type === "trace") {
-      assistantMessage.content = "Working through the request...";
-      assistantMessage.metadata.trace_events.push(event.event);
-      renderMessages();
-      return;
-    }
-    if (event.type === "final") {
-      assistantMessage.content = event.response.answer || "";
-      assistantMessage.metadata = event.response;
-      renderMessages();
-      return;
-    }
-    if (event.type === "error") {
-      assistantMessage.content = `Error: ${event.error}`;
-      renderMessages();
-    }
-  });
-
-  state.isSending = false;
-  updateComposerState();
-  await refreshSessions();
-  setStatus("Reply complete");
 }
 
 async function refreshSessions() {
   const payload = await api("/api/sessions");
   state.sessions = payload.sessions || [];
   renderSessions();
+  updateActiveSessionMeta();
 }
 
 function updateTraceNote() {
@@ -556,6 +594,23 @@ function setView(viewName) {
 
 function setStatus(message) {
   dom.statusBanner.textContent = message;
+}
+
+function updateActiveSessionMeta() {
+  if (!state.sessionId) {
+    dom.activeSessionMeta.textContent = "No active chat yet.";
+    return;
+  }
+  const session = state.sessions.find((item) => item.id === state.sessionId);
+  if (!session) {
+    dom.activeSessionMeta.textContent = "Active chat loaded.";
+    return;
+  }
+  const updated = formatTime(session.updated_at || session.created_at || "");
+  const messageCount = Number(session.message_count || 0);
+  dom.activeSessionMeta.textContent =
+    `${session.title || "New chat"} • ${messageCount} message${messageCount === 1 ? "" : "s"}` +
+    `${updated ? ` • updated ${updated}` : ""}`;
 }
 
 async function api(path, options = {}) {
@@ -613,7 +668,22 @@ function readProviderForm(card) {
     secret_ref: valueOf("secret_ref").value.trim(),
     base_url: valueOf("base_url").value.trim(),
     enabled: valueOf("enabled").checked,
+    has_secret: card.dataset.hasSecret === "true",
   };
+}
+
+function syncProviderDraftsFromDom() {
+  const cards = Array.from(dom.providersList.querySelectorAll(".provider-card"));
+  cards.forEach((card) => {
+    const index = Number(card.dataset.index);
+    if (!Number.isInteger(index) || !state.providers[index]) {
+      return;
+    }
+    state.providers[index] = {
+      ...state.providers[index],
+      ...readProviderForm(card),
+    };
+  });
 }
 
 function makeBlankProvider() {

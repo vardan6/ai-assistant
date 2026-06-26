@@ -172,3 +172,51 @@ def test_server_streams_chat_and_persists_session(tmp_path):
     body = session.json()
     assert body["title"] == "CLI chat"
     assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
+
+
+def test_server_serves_web_ui_and_assets(tmp_path):
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    client = TestClient(create_app(config=config))
+
+    index = client.get("/")
+    assert index.status_code == 200
+    assert 'id="provider-select"' in index.text
+    assert 'id="providers-form"' in index.text
+    assert 'src="/assets/app.js"' in index.text
+
+    app_js = client.get("/assets/app.js")
+    assert app_js.status_code == 200
+    assert "function sendMessage()" in app_js.text
+
+    styles = client.get("/assets/styles.css")
+    assert styles.status_code == 200
+    assert ".shell" in styles.text
+
+
+def test_ui_settings_round_trip(tmp_path):
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    client = TestClient(create_app(config=config))
+
+    original = client.get("/api/settings/ui")
+    assert original.status_code == 200
+    assert original.json() == {
+        "default_gating_mode": "gated",
+        "verbose_trace": True,
+    }
+
+    updated = client.put(
+        "/api/settings/ui",
+        json={"default_gating_mode": "bind_all", "verbose_trace": False},
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "default_gating_mode": "bind_all",
+        "verbose_trace": False,
+    }
+
+    reloaded = client.get("/api/settings/ui")
+    assert reloaded.status_code == 200
+    assert reloaded.json() == {
+        "default_gating_mode": "bind_all",
+        "verbose_trace": False,
+    }
