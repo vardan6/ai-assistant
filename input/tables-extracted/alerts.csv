@@ -1,0 +1,30 @@
+alert_id,plant_id,inverter_id,alert_code,severity,type,description,status,priority,created_at,acknowledged_at,resolved_at,downtime_minutes,assigned_to
+1,4137001,,ALM-1001,critical,grid_disconnection,Plant disconnected from grid,open,1,2026-06-19 10:00:00,2026-06-19 10:12:00,,,V. Singh
+2,4135001,INV_4135001_10,ALM-1002,major,inverter_fault,Inverter tripped on fault,open,2,2026-06-21 06:00:00,2026-06-21 07:00:00,,,V. Singh
+3,4136001,,ALM-1003,minor,low_yield,Daily yield below expected band,open,3,2026-06-21 16:00:00,,,,M. Khan
+4,4135001,INV_4135001_05,ALM-1004,minor,underperformance,Sustained low performance ratio,open,3,2026-06-13 10:00:00,2026-06-13 12:00:00,,,P. Nair
+5,4136001,INV_4136001_02,ALM-1005,major,inverter_fault,Inverter tripped on fault,resolved,2,2026-06-10 10:00:00,2026-06-10 10:20:00,2026-06-10 15:00:00,300,V. Singh
+6,4135001,,ALM-1006,major,overheating,Module temperature exceeded threshold,resolved,2,2026-06-15 11:00:00,2026-06-15 11:10:00,2026-06-15 15:40:00,0,P. Nair
+7,4135001,INV_4135001_08,ALM-1007,warning,sensor_fault,Implausible sensor reading detected,resolved,4,2026-06-08 06:00:00,2026-06-08 07:00:00,2026-06-08 12:00:00,0,R. Iyer
+8,4136001,INV_4136001_04,ALM-1008,minor,communication_loss,Telemetry communication lost,resolved,3,2026-06-12 09:00:00,2026-06-12 09:30:00,2026-06-12 15:30:00,0,A. Sharma
+9,4135001,,ALM-1009,warning,sensor_fault,Implausible sensor reading detected,resolved,4,2026-06-05 12:00:00,2026-06-05 12:30:00,2026-06-05 18:00:00,0,V. Singh
+10,4135001,INV_4135001_03,ALM-1010,major,overheating,Module temperature exceeded threshold,resolved,2,2026-06-15 22:00:00,2026-06-15 22:51:43,2026-06-16 10:10:27,730,S. Reddy
+11,4136001,INV_4136001_02,ALM-1011,major,inverter_fault,Inverter tripped on fault,resolved,2,2026-06-01 11:00:00,2026-06-01 12:26:45,2026-06-01 21:42:36,642,P. Nair
+12,4135001,INV_4135001_03,ALM-1012,minor,communication_loss,Telemetry communication lost,resolved,3,2026-06-04 01:00:00,2026-06-04 02:28:14,2026-06-04 16:43:55,943,P. Nair
+13,4136001,INV_4136001_07,ALM-1013,minor,communication_loss,Telemetry communication lost,resolved,3,2026-06-08 14:00:00,2026-06-08 15:27:41,2026-06-09 22:14:41,1934,R. Iyer
+14,4136001,INV_4136001_08,ALM-1014,major,overheating,Module temperature exceeded threshold,resolved,2,2026-05-25 16:00:00,2026-05-25 17:09:56,2026-05-26 09:32:23,1052,A. Sharma
+15,4135001,,ALM-1015,critical,grid_disconnection,Plant disconnected from grid,resolved,1,2026-06-04 04:00:00,2026-06-04 05:09:02,2026-06-04 09:36:12,336,V. Singh
+16,4135001,INV_4135001_10,ALM-1016,minor,communication_loss,Telemetry communication lost,resolved,3,2026-06-12 10:00:00,2026-06-12 10:14:10,2026-06-13 08:24:11,1344,V. Singh
+17,4137001,INV_4137001_03,ALM-1017,critical,inverter_fault,Inverter tripped on fault,resolved,1,2026-06-08 07:00:00,2026-06-08 07:29:58,2026-06-08 13:40:45,400,S. Reddy
+18,4136001,INV_4136001_02,ALM-1018,minor,communication_loss,Telemetry communication lost,resolved,3,2026-05-28 15:00:00,2026-05-28 15:25:03,2026-05-30 07:39:03,2439,V. Singh
+19,4136001,INV_4136001_01,ALM-1019,warning,low_yield,Daily yield below expected band,resolved,4,2026-06-01 02:00:00,2026-06-01 03:29:00,2026-06-03 19:33:33,3933,S. Reddy
+20,4135001,,ALM-1020,critical,grid_disconnection,Plant disconnected from grid,resolved,1,2026-05-31 19:00:00,2026-05-31 19:44:00,2026-05-31 23:51:20,291,R. Iyer
+21,4137001,INV_4137001_04,ALM-1021,minor,communication_loss,Telemetry communication lost,resolved,3,2026-05-25 05:00:00,2026-05-25 05:54:29,2026-05-27 04:49:26,2869,V. Singh
+22,4135001,INV_4135001_04,ALM-1022,minor,communication_loss,Telemetry communication lost,resolved,3,2026-06-05 06:00:00,2026-06-05 06:35:24,2026-06-07 21:02:19,3782,V. Singh
+23,4136001,,ALM-1023,critical,grid_disconnection,Plant disconnected from grid,resolved,1,2026-06-05 08:00:00,2026-06-05 09:25:22,2026-06-05 13:28:25,328,M. Khan
+24,4136001,INV_4136001_08,ALM-1024,major,overheating,Module temperature exceeded threshold,resolved,2,2026-05-30 18:00:00,2026-05-30 19:00:11,2026-05-31 22:47:25,1727,S. Reddy
+25,4135001,INV_4135001_02,ALM-1025,critical,inverter_fault,Inverter tripped on fault,resolved,1,2026-06-12 03:00:00,2026-06-12 04:26:23,2026-06-12 11:19:31,499,V. Singh
+26,4135001,INV_4135001_02,ALM-1026,warning,low_yield,Daily yield below expected band,resolved,4,2026-06-01 19:00:00,2026-06-01 19:56:28,2026-06-04 04:00:22,3420,R. Iyer
+27,4135001,INV_4135001_10,ALM-1027,critical,inverter_fault,Inverter tripped on fault,resolved,1,2026-06-02 21:00:00,2026-06-02 21:42:10,2026-06-03 04:07:51,427,M. Khan
+28,4135001,INV_4135001_04,ALM-1028,minor,low_yield,Daily yield below expected band,resolved,3,2026-06-07 01:00:00,2026-06-07 02:04:58,2026-06-07 13:28:42,748,S. Reddy
+29,4137001,INV_4137001_07,ALM-1029,warning,low_yield,Daily yield below expected band,resolved,4,2026-05-23 13:00:00,2026-05-23 13:39:14,2026-05-26 02:32:28,3692,R. Iyer

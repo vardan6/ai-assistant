@@ -1,0 +1,68 @@
+# Python environments
+.venv/
+venv/
+.python-version
+.envrc
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.pyre/
+.tox/
+.nox/
+
+# Test and coverage output
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Local runtime state
+/data/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.log
+*.pid
+
+# Local configuration and secrets
+/config/*.local.json
+.env
+.env.*
+!.env.example
+
+# Local agent/editor tooling
+.agents/
+.claude/
+/AGENTS.md
+/CLAUDE.md
+/activeContext.md
+/roadmap.md
+/progress.md
+/docs/init-plan.md
+/handoff-*.md
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db
+Desktop.ini

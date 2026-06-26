@@ -1,0 +1,49 @@
+{
+  "llm_providers": [
+    {
+      "id": "openai-default",
+      "display_name": "OpenAI",
+      "provider_type": "openai",
+      "model_id": "gpt-4o-mini",
+      "auth_mode": "env_var",
+      "secret_ref": "OPENAI_API_KEY",
+      "base_url": "",
+      "enabled": true
+    },
+    {
+      "id": "ollama-default",
+      "display_name": "Ollama Local",
+      "provider_type": "ollama",
+      "model_id": "llama3:latest",
+      "auth_mode": "none",
+      "secret_ref": "",
+      "base_url": "http://localhost:11434",
+      "enabled": true
+    }
+  ],
+  "model_routing": {
+    "intent": {
+      "primary_provider_id": "ollama-default",
+      "fallback_provider_ids": ["openai-default"]
+    },
+    "synthesis": {
+      "primary_provider_id": "openai-default",
+      "fallback_provider_ids": ["ollama-default"]
+    }
+  },
+  "data": {
+    "csv_dir": "input/tables-extracted"
+  },
+  "logging": {
+    "llm_secrets_db_path": "data/llm_secrets.sqlite3",
+    "ai_sessions_db_path": "data/ai_sessions.sqlite3"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9006
+  },
+  "ui": {
+    "default_gating_mode": "gated",
+    "verbose_trace": true
+  }
+}

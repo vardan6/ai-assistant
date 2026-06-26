@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Solar AI Assistant</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">SA</div>
+          <div>
+            <p class="eyebrow">Solar AI Assistant</p>
+            <h1>Operations Console</h1>
+          </div>
+        </div>
+
+        <div class="sidebar-actions">
+          <button id="new-session-button" class="button button-primary" type="button">New Chat</button>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-head">
+            <h2>Sessions</h2>
+            <span id="dataset-today" class="pill">Loading</span>
+          </div>
+          <div id="sessions-list" class="session-list"></div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="view-tabs" role="tablist" aria-label="Workspace view">
+            <button id="tab-chat" class="tab is-active" type="button" data-view="chat">Chat</button>
+            <button id="tab-settings" class="tab" type="button" data-view="settings">Settings</button>
+          </div>
+          <div id="status-banner" class="status-banner">Connecting</div>
+        </header>
+
+        <section id="view-chat" class="view is-active">
+          <div class="chat-header panel">
+            <div>
+              <p class="eyebrow">Live Controls</p>
+              <h2>Ask the dataset</h2>
+            </div>
+            <div class="control-row">
+              <label class="field compact">
+                <span>Provider</span>
+                <select id="provider-select"></select>
+              </label>
+              <label class="field compact">
+                <span>Tool Gating</span>
+                <select id="gating-select">
+                  <option value="gated">gated</option>
+                  <option value="bind_all">bind_all</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div id="messages" class="messages panel"></div>
+
+          <form id="composer-form" class="composer panel">
+            <label class="field grow">
+              <span>Question</span>
+              <textarea id="question-input" rows="3" placeholder="Which plants are offline today?"></textarea>
+            </label>
+            <div class="composer-actions">
+              <div id="trace-visibility-note" class="hint"></div>
+              <button id="send-button" class="button button-primary" type="submit">Send</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="view-settings" class="view">
+          <div class="settings-grid">
+            <section class="panel settings-panel">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">App Defaults</p>
+                  <h2>Behavior</h2>
+                </div>
+              </div>
+              <form id="ui-settings-form">
+                <div class="field">
+                  <span>Default tool gating</span>
+                  <select id="settings-default-gating">
+                    <option value="gated">gated</option>
+                    <option value="bind_all">bind_all</option>
+                  </select>
+                </div>
+                <label class="checkbox-row">
+                  <input id="settings-verbose-trace" type="checkbox">
+                  <span>Show detailed agent trace on assistant messages</span>
+                </label>
+                <div class="settings-actions">
+                  <button class="button button-primary" type="submit">Save Defaults</button>
+                </div>
+              </form>
+            </section>
+
+            <section class="panel settings-panel settings-panel-wide">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">LLM Providers</p>
+                  <h2>Routing and credentials</h2>
+                </div>
+                <button id="add-provider-button" class="button" type="button">Add Provider</button>
+              </div>
+
+              <form id="providers-form">
+                <div class="routing-grid">
+                  <div class="routing-card">
+                    <h3>Intent routing</h3>
+                    <label class="field">
+                      <span>Primary provider</span>
+                      <select id="intent-primary"></select>
+                    </label>
+                    <label class="field">
+                      <span>Fallback providers</span>
+                      <input id="intent-fallbacks" type="text" placeholder="comma,separated,ids">
+                    </label>
+                  </div>
+                  <div class="routing-card">
+                    <h3>Synthesis routing</h3>
+                    <label class="field">
+                      <span>Primary provider</span>
+                      <select id="synthesis-primary"></select>
+                    </label>
+                    <label class="field">
+                      <span>Fallback providers</span>
+                      <input id="synthesis-fallbacks" type="text" placeholder="comma,separated,ids">
+                    </label>
+                  </div>
+                </div>
+
+                <div id="providers-list" class="provider-list"></div>
+
+                <div class="settings-actions">
+                  <button class="button button-primary" type="submit">Save Providers</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="empty-state-template">
+      <div class="empty-state">
+        <p class="eyebrow">Ready</p>
+        <h3>No messages yet</h3>
+        <p>Start a new chat and ask about plants, inverters, generation, alerts, anomalies, or maintenance.</p>
+      </div>
+    </template>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+  </html>

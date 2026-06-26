@@ -1,0 +1,11 @@
+# Conversational AI assistant — pipeline dependencies.
+# Phase 0 needs pandas (data layer) + langchain (provider + tool-calling loop).
+pandas
+langchain
+langchain-core
+langchain-openai
+langchain-ollama
+langchain-anthropic
+fastapi
+uvicorn
+httpx

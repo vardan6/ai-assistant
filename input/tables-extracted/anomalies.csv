@@ -1,0 +1,56 @@
+anomaly_id,plant_id,inverter_id,asset_id,asset_type,anomaly_type,severity,cause,detection_method,temperature_delta_c,power_loss_pct,estimated_power_loss_kw,detected_date,status,recommended_action,resolved_date,maintenance_ticket_id,inspection_id
+1,4135001,INV_4135001_05,MOD-4135001-05-173,cell,hotspot,high,soiling,IR_thermography,30.8,13.9,0.081,2026-06-11,scheduled_repair,Monitor / replace module,,6,INSP-2026-06-11
+2,4135001,INV_4135001_05,MOD-4135001-05-232,module,multi hotspot,medium,soiling,IR_thermography,24.1,14.5,0.084,2026-06-11,monitoring,Replace module,,,INSP-2026-06-11
+3,4135001,INV_4135001_05,MOD-4135001-05-150,cell,hotspot,high,physical internal,IR_thermography,38.2,4.1,0.024,2026-06-11,monitoring,Monitor / replace module,,,INSP-2026-06-11
+4,4135001,INV_4135001_10,STR-4135001-10-10,string,string disconnection,critical,physical internal,SCADA,1.6,100.0,208.333,2026-06-18,scheduled_repair,Repair / reconnect string,,5,INSP-2026-06-18
+5,4137001,INV_4137001_01,STR-4137001-01-06,string,string disconnection,critical,physical internal,SCADA,0.6,100.0,312.5,2026-06-19,open,Repair / reconnect string,,,INSP-2026-06-18
+6,4136001,INV_4136001_03,MOD-4136001-03-102:S3,substring,single bypass,high,shading,IR_thermography,25.3,32.4,0.188,2026-06-11,resolved,Inspect & replace bypass diode,2026-06-18,,INSP-2026-06-11
+7,4135001,INV_4135001_09,MOD-4135001-09-242,cell,hotspot,high,soiling,IR_thermography,27.4,9.1,0.053,2026-06-11,open,Monitor / replace module,,,INSP-2026-06-11
+8,4136001,INV_4136001_08,MOD-4136001-08-075:S3,substring,single bypass,high,shading,IR_thermography,17.5,32.8,0.19,2026-06-11,open,Inspect & replace bypass diode,,,INSP-2026-06-11
+9,4135001,INV_4135001_03,STR-4135001-03-02,string,string disconnection,critical,physical internal,SCADA,1.8,100.0,312.5,2026-06-11,open,Repair / reconnect string,,,INSP-2026-06-11
+10,4136001,INV_4136001_01,MOD-4136001-01-206,cell,hotspot,high,soiling,IR_thermography,27.2,13.6,0.079,2026-06-18,monitoring,Monitor / replace module,,,INSP-2026-06-18
+11,4135001,INV_4135001_04,MOD-4135001-04-097,module,multi hotspot,high,dropping,IR_thermography,40.0,15.7,0.091,2026-06-11,open,Replace module,,,INSP-2026-06-11
+12,4136001,INV_4136001_04,MOD-4136001-04-108:S1,substring,single bypass,high,shading,IR_thermography,17.0,31.1,0.18,2026-06-11,scheduled_repair,Inspect & replace bypass diode,,,INSP-2026-06-11
+13,4135001,INV_4135001_05,MOD-4135001-05-028,cell,hotspot,medium,physical internal,IR_thermography,21.0,13.6,0.079,2026-06-18,scheduled_repair,Monitor / replace module,,,INSP-2026-06-18
+14,4137001,INV_4137001_08,TRK-4137001-18,tracker,tracker issue,medium,physical internal,SCADA,0.6,17.9,127.798,2026-06-11,monitoring,Repair tracker drive,,,INSP-2026-06-11
+15,4135001,INV_4135001_04,MOD-4135001-04-064,module,full panel,critical,physical internal,IR_thermography,1.9,100.0,0.58,2026-06-18,monitoring,Replace panel,,,INSP-2026-06-18
+16,4137001,INV_4137001_03,MOD-4137001-03-164,module,multi hotspot,high,physical internal,IR_thermography,38.3,10.4,0.06,2026-06-18,open,Replace module,,,INSP-2026-06-18
+17,4135001,INV_4135001_10,TRK-4135001-13,tracker,tracker issue,medium,physical internal,SCADA,1.7,22.9,157.187,2026-05-28,scheduled_repair,Repair tracker drive,,,INSP-2026-05-28
+18,4136001,INV_4136001_03,MOD-4136001-03-124,cell,hotspot,high,physical internal,IR_thermography,39.3,5.7,0.033,2026-06-18,resolved,Monitor / replace module,2026-06-25,,INSP-2026-06-18
+19,4137001,INV_4137001_12,MOD-4137001-12-041,junction_box,heated junction box,critical,physical internal,IR_thermography,48.9,20.3,0.118,2026-06-11,open,Replace junction box (fire risk),,,INSP-2026-06-11
+20,4137001,INV_4137001_12,MOD-4137001-12-032,module,full panel,critical,physical internal,IR_thermography,1.0,100.0,0.58,2026-06-11,open,Replace panel,,,INSP-2026-06-11
+21,4137001,INV_4137001_03,MOD-4137001-03-102:S1,substring,single bypass,high,shading,IR_thermography,27.4,31.1,0.18,2026-06-18,open,Inspect & replace bypass diode,,,INSP-2026-06-18
+22,4136001,INV_4136001_08,STR-4136001-08-08,string,string disconnection,critical,physical internal,SCADA,0.9,100.0,231.25,2026-06-18,monitoring,Repair / reconnect string,,,INSP-2026-06-18
+23,4137001,INV_4137001_02,MOD-4137001-02-236,module,multi hotspot,high,soiling,IR_thermography,43.7,13.8,0.08,2026-05-28,monitoring,Replace module,,,INSP-2026-05-28
+24,4137001,INV_4137001_10,MOD-4137001-10-291:S1,substring,single bypass,medium,shading,IR_thermography,20.2,29.4,0.171,2026-06-18,open,Inspect & replace bypass diode,,,INSP-2026-06-18
+25,4137001,INV_4137001_01,STR-4137001-01-01,string,string disconnection,critical,physical internal,SCADA,1.0,100.0,312.5,2026-06-11,scheduled_repair,Repair / reconnect string,,,INSP-2026-06-11
+26,4135001,INV_4135001_02,MOD-4135001-02-220,module,multi hotspot,high,physical internal,IR_thermography,35.2,12.8,0.074,2026-06-18,scheduled_repair,Replace module,,,INSP-2026-06-18
+27,4137001,INV_4137001_01,MOD-4137001-01-219,junction_box,heated junction box,critical,physical internal,IR_thermography,52.1,36.0,0.209,2026-06-18,open,Replace junction box (fire risk),,,INSP-2026-06-18
+28,4136001,INV_4136001_07,MOD-4136001-07-212,cell,hotspot,medium,physical internal,IR_thermography,12.6,6.8,0.039,2026-06-18,open,Monitor / replace module,,,INSP-2026-06-18
+29,4136001,INV_4136001_02,MOD-4136001-02-177,cell,hotspot,high,physical internal,IR_thermography,32.3,4.2,0.024,2026-05-28,open,Monitor / replace module,,,INSP-2026-05-28
+30,4137001,INV_4137001_11,MOD-4137001-11-228,junction_box,heated junction box,high,physical internal,IR_thermography,42.2,23.8,0.138,2026-06-11,scheduled_repair,Replace junction box (fire risk),,,INSP-2026-06-11
+31,4137001,INV_4137001_07,TRK-4137001-17,tracker,tracker issue,medium,physical internal,SCADA,1.4,19.8,60.659,2026-06-18,open,Repair tracker drive,,,INSP-2026-06-18
+32,4137001,INV_4137001_04,STR-4137001-04-02,string,string disconnection,critical,physical internal,SCADA,1.5,100.0,227.273,2026-05-28,resolved,Repair / reconnect string,2026-06-02,,INSP-2026-05-28
+33,4136001,INV_4136001_04,MOD-4136001-04-273:S3,substring,single bypass,high,physical internal,IR_thermography,23.6,32.4,0.188,2026-06-11,open,Inspect & replace bypass diode,,,INSP-2026-06-11
+34,4135001,INV_4135001_01,STR-4135001-01-02,string,string disconnection,critical,physical internal,SCADA,0.1,100.0,227.273,2026-06-18,resolved,Repair / reconnect string,2026-06-21,,INSP-2026-06-18
+35,4136001,INV_4136001_06,MOD-4136001-06-178,module,multi hotspot,high,physical internal,IR_thermography,30.3,19.9,0.115,2026-06-18,open,Replace module,,,INSP-2026-06-18
+36,4135001,INV_4135001_02,MOD-4135001-02-249,module,full panel,critical,physical internal,IR_thermography,1.9,100.0,0.58,2026-06-18,open,Replace panel,,,INSP-2026-06-18
+37,4135001,INV_4135001_03,MOD-4135001-03-263,module,multi hotspot,high,physical internal,IR_thermography,38.3,18.7,0.108,2026-05-28,open,Replace module,,,INSP-2026-05-28
+38,4137001,INV_4137001_04,MOD-4137001-04-040,cell,hotspot,medium,physical internal,IR_thermography,14.4,14.0,0.081,2026-06-11,open,Monitor / replace module,,,INSP-2026-06-11
+39,4135001,INV_4135001_08,MOD-4135001-08-260:S2,substring,single bypass,high,physical internal,IR_thermography,20.7,34.2,0.198,2026-06-18,open,Inspect & replace bypass diode,,,INSP-2026-06-18
+40,4135001,INV_4135001_07,MOD-4135001-07-202,junction_box,heated junction box,high,physical internal,IR_thermography,34.2,21.3,0.124,2026-06-18,resolved,Replace junction box (fire risk),2026-06-28,,INSP-2026-06-18
+41,4137001,INV_4137001_10,MOD-4137001-10-168,cell,hotspot,high,physical internal,IR_thermography,34.4,13.9,0.081,2026-05-28,monitoring,Monitor / replace module,,,INSP-2026-05-28
+42,4137001,INV_4137001_02,MOD-4137001-02-027,module,full panel,critical,physical internal,IR_thermography,4.7,100.0,0.58,2026-05-28,resolved,Replace panel,2026-06-06,,INSP-2026-05-28
+43,4136001,INV_4136001_07,MOD-4136001-07-044,cell,hotspot,high,soiling,IR_thermography,33.6,8.9,0.052,2026-06-18,resolved,Monitor / replace module,2026-06-27,,INSP-2026-06-18
+44,4135001,INV_4135001_04,STR-4135001-04-06,string,string disconnection,critical,physical internal,SCADA,1.1,100.0,227.273,2026-06-11,open,Repair / reconnect string,,,INSP-2026-06-11
+45,4137001,INV_4137001_04,MOD-4137001-04-039,module,multi hotspot,high,soiling,IR_thermography,38.5,24.9,0.144,2026-06-18,open,Replace module,,,INSP-2026-06-18
+46,4137001,INV_4137001_02,STR-4137001-02-02,string,string disconnection,critical,physical internal,SCADA,2.0,100.0,277.778,2026-05-28,open,Repair / reconnect string,,,INSP-2026-05-28
+47,4136001,INV_4136001_08,MOD-4136001-08-253,junction_box,heated junction box,critical,physical internal,IR_thermography,52.2,24.3,0.141,2026-06-11,open,Replace junction box (fire risk),,,INSP-2026-06-11
+48,4136001,INV_4136001_07,MOD-4136001-07-094,cell,hotspot,high,physical internal,IR_thermography,33.6,9.0,0.052,2026-05-28,open,Monitor / replace module,,,INSP-2026-05-28
+49,4137001,INV_4137001_04,STR-4137001-04-06,string,string disconnection,critical,physical internal,SCADA,0.8,100.0,227.273,2026-06-18,open,Repair / reconnect string,,,INSP-2026-06-18
+50,4136001,INV_4136001_01,MOD-4136001-01-050,cell,hotspot,high,physical internal,IR_thermography,26.5,6.0,0.035,2026-05-28,resolved,Monitor / replace module,2026-05-31,,INSP-2026-05-28
+51,4136001,INV_4136001_06,MOD-4136001-06-155,cell,hotspot,high,dropping,IR_thermography,28.1,8.4,0.049,2026-06-18,scheduled_repair,Monitor / replace module,,,INSP-2026-06-18
+52,4137001,INV_4137001_05,MOD-4137001-05-073,cell,hotspot,high,shading,IR_thermography,41.4,14.4,0.084,2026-05-28,open,Monitor / replace module,,,INSP-2026-05-28
+53,4135001,INV_4135001_03,MOD-4135001-03-101:S2,substring,single bypass,high,shading,IR_thermography,15.5,30.2,0.175,2026-06-11,resolved,Inspect & replace bypass diode,2026-06-17,,INSP-2026-06-11
+54,4135001,INV_4135001_10,STR-4135001-10-10,string,string disconnection,critical,physical internal,SCADA,1.5,100.0,208.333,2026-06-11,resolved,Repair / reconnect string,2026-06-20,,INSP-2026-06-11
+55,4136001,INV_4136001_08,MOD-4136001-08-118,cell,hotspot,high,soiling,IR_thermography,34.7,5.8,0.034,2026-06-18,open,Monitor / replace module,,,INSP-2026-06-18

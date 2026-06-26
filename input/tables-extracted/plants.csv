@@ -1,0 +1,4 @@
+plant_id,name,location,region,latitude,longitude,capacity_mw,num_inverters,panel_type,tracker_type,commissioned_date,grid_operator,tariff_usd_per_kwh,status
+4135001,Rajasthan Solar Park,"Jodhpur, Rajasthan",Northwest,26.2389,73.0243,25.0,10,monocrystalline,single-axis,2019-03-15,Rajasthan SLDC,0.052,active
+4136001,Gujarat Solar Farm,"Patan, Gujarat",West,23.8505,72.1262,18.5,8,polycrystalline,fixed-tilt,2020-07-22,Gujarat SLDC,0.048,maintenance
+4137001,Tamil Nadu PV Plant,"Tirunelveli, Tamil Nadu",South,8.7139,77.7567,30.0,12,monocrystalline,single-axis,2021-11-10,Tamil Nadu SLDC,0.045,offline

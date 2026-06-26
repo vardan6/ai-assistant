@@ -1,0 +1,20 @@
+ticket_id,plant_id,inverter_id,type,priority,status,scheduled_date,started_date,completed_date,duration_hours,cost_usd,parts_replaced,technician,vendor
+1,4137001,,grid_restoration,high,in_progress,2026-06-19 10:00:00,2026-06-19 12:00:00,,,18500,"breaker, relay",M. Khan,GridFix Services
+2,4136001,INV_4136001_06,inverter_replacement,high,in_progress,2026-06-17 08:00:00,2026-06-17 10:00:00,,,6200,"IGBT module, cooling fan",V. Singh,SolarCare Ltd
+3,4136001,INV_4136001_07,inverter_replacement,high,in_progress,2026-06-17 08:00:00,2026-06-17 10:00:00,,,6200,"IGBT module, cooling fan",S. Reddy,SolarCare Ltd
+4,4136001,INV_4136001_08,inverter_replacement,high,in_progress,2026-06-17 08:00:00,2026-06-17 10:00:00,,,6200,"IGBT module, cooling fan",R. Iyer,SolarCare Ltd
+5,4135001,INV_4135001_10,inverter_replacement,high,scheduled,2026-06-24 10:00:00,,,,6200,"IGBT module, cooling fan",R. Iyer,SolarCare Ltd
+6,4135001,INV_4135001_05,panel_cleaning,medium,scheduled,2026-06-23 10:00:00,,,,900,-,P. Nair,In-house
+7,4136001,,panel_cleaning,low,scheduled,2026-06-26 10:00:00,,,,1500,-,S. Reddy,In-house
+8,4135001,INV_4135001_09,firmware_update,low,done,2026-06-06 00:00:00,2026-06-06 10:18:35,2026-06-06 17:00:35,6.7,388,-,V. Singh,In-house
+9,4135001,,panel_cleaning,low,done,2026-06-16 00:00:00,2026-06-16 11:20:55,2026-06-16 15:32:55,4.2,1038,-,V. Singh,In-house
+10,4135001,INV_4135001_05,cabling_repair,high,done,2026-05-26 00:00:00,2026-05-26 03:52:02,2026-05-26 09:58:02,6.1,2824,DC cable 50m,A. Sharma,GridFix Services
+11,4137001,,grid_restoration,low,done,2026-05-26 00:00:00,2026-05-26 07:16:03,2026-05-26 11:22:03,4.1,17478,"breaker, relay",S. Reddy,GridFix Services
+12,4136001,INV_4136001_04,inspection,high,done,2026-06-17 00:00:00,2026-06-17 10:42:59,2026-06-17 12:24:59,1.7,604,-,P. Nair,GridFix Services
+13,4136001,INV_4136001_08,inverter_replacement,high,done,2026-05-31 00:00:00,2026-05-31 12:22:21,2026-05-31 17:04:21,4.7,7764,"IGBT module, cooling fan",V. Singh,VoltTech
+14,4135001,INV_4135001_05,firmware_update,medium,done,2026-06-17 00:00:00,2026-06-17 19:36:45,2026-06-18 00:36:45,5.0,267,-,S. Reddy,GridFix Services
+15,4137001,INV_4137001_10,inspection,high,done,2026-05-31 00:00:00,2026-05-31 07:13:54,2026-05-31 14:25:54,7.2,604,-,M. Khan,VoltTech
+16,4136001,INV_4136001_04,inverter_replacement,low,done,2026-05-26 00:00:00,2026-05-26 11:28:54,2026-05-26 13:10:54,1.7,7410,"IGBT module, cooling fan",S. Reddy,SolarCare Ltd
+17,4136001,INV_4136001_05,cabling_repair,medium,done,2026-06-17 00:00:00,2026-06-17 04:58:18,2026-06-17 09:34:18,4.6,2389,DC cable 50m,M. Khan,GridFix Services
+18,4137001,INV_4137001_08,firmware_update,medium,done,2026-06-02 00:00:00,2026-06-02 04:37:41,2026-06-02 10:13:41,5.6,382,-,R. Iyer,VoltTech
+19,4135001,INV_4135001_05,inspection,high,done,2026-05-25 00:00:00,2026-05-25 07:54:17,2026-05-25 15:30:17,7.6,567,-,V. Singh,SolarCare Ltd
