@@ -11,7 +11,7 @@ from app.ai.secret_store import SecretStore
 from app.ai.session_store import SessionStore
 from app.config import AppConfig, DEFAULT_SETTINGS, load_config
 from app.pipeline import Pipeline, PipelineAnswer
-from app.provider_config import update_provider_settings
+from app.provider_config import export_config_payload, import_config_payload, update_provider_settings
 from app.server import create_app
 
 
@@ -50,6 +50,27 @@ def test_secret_store_and_provider_settings_persist(tmp_path):
     assert secrets.get("OPENAI_API_KEY") == "secret-value"
     secrets.delete("OPENAI_API_KEY")
     assert secrets.get("OPENAI_API_KEY") == ""
+
+
+def test_config_export_import_round_trip(tmp_path):
+    settings_path = tmp_path / "common.local.json"
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=settings_path)
+
+    exported = export_config_payload(config)
+    assert "appearance" in exported
+    assert exported["llm_providers"][0]["secret_ref"] == "OPENAI_API_KEY"
+
+    exported["appearance"]["theme_mode"] = "system"
+    exported["appearance"]["light_theme"] = "cool_light"
+    exported["ui"]["verbose_trace"] = False
+    exported["llm_providers"][0]["model_id"] = "gpt-4.1-mini"
+    imported = import_config_payload(config, payload=exported)
+
+    reloaded = load_config(imported.settings_path)
+    assert reloaded.appearance["theme_mode"] == "system"
+    assert reloaded.appearance["light_theme"] == "cool_light"
+    assert reloaded.verbose_trace is False
+    assert reloaded.llm_providers[0]["model_id"] == "gpt-4.1-mini"
 
 
 def test_pipeline_returns_telemetry_and_trace(monkeypatch):
@@ -181,16 +202,61 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     index = client.get("/")
     assert index.status_code == 200
     assert 'id="provider-select"' in index.text
+    assert 'id="chat-provider-summary"' in index.text
     assert 'id="providers-form"' in index.text
+    assert 'id="provider-display-name"' in index.text
+    assert 'id="providers-registry-pill"' in index.text
+    assert 'id="appearance-theme-mode"' in index.text
+    assert 'value="sandstone_light"' in index.text
+    assert 'data-prompt="Which plants are offline today?"' in index.text
     assert 'src="/assets/app.js"' in index.text
 
     app_js = client.get("/assets/app.js")
     assert app_js.status_code == 200
     assert "function sendMessage()" in app_js.text
+    assert "function updateChatControlSummaries()" in app_js.text
+    assert "function renderProviderRegistry()" in app_js.text
 
     styles = client.get("/assets/styles.css")
     assert styles.status_code == 200
-    assert ".shell" in styles.text
+    assert ".appbar" in styles.text
+    assert ".chat-workspace" in styles.text
+    assert ".appearance-reference-card" in styles.text
+    assert ".provider-registry-table" in styles.text
+
+
+def test_appearance_settings_round_trip(tmp_path):
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    client = TestClient(create_app(config=config))
+
+    original = client.get("/api/settings/appearance")
+    assert original.status_code == 200
+    assert original.json() == {
+        "theme_mode": "light",
+        "light_theme": "quiet_light",
+        "dark_theme": "vscode_dark",
+    }
+
+    updated = client.put(
+        "/api/settings/appearance",
+        json={"theme_mode": "system", "light_theme": "sandstone_light", "dark_theme": "midnight_dark"},
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "theme_mode": "system",
+        "light_theme": "sandstone_light",
+        "dark_theme": "midnight_dark",
+    }
+
+    reloaded = client.get("/api/settings/appearance")
+    assert reloaded.status_code == 200
+    assert reloaded.json()["light_theme"] == "sandstone_light"
+
+    rejected = client.put(
+        "/api/settings/appearance",
+        json={"theme_mode": "nope", "light_theme": "quiet_light", "dark_theme": "vscode_dark"},
+    )
+    assert rejected.status_code == 400
 
 
 def test_ui_settings_round_trip(tmp_path):
@@ -220,3 +286,27 @@ def test_ui_settings_round_trip(tmp_path):
         "default_gating_mode": "bind_all",
         "verbose_trace": False,
     }
+
+
+def test_server_config_io_round_trip_and_validation(tmp_path):
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    client = TestClient(create_app(config=config))
+
+    exported = client.get("/api/settings/config")
+    assert exported.status_code == 200
+    payload = exported.json()["config"]
+    assert payload["appearance"]["light_theme"] == "quiet_light"
+
+    payload["appearance"]["light_theme"] = "vscode_light"
+    payload["ui"]["default_gating_mode"] = "bind_all"
+    payload["llm_providers"][1]["base_url"] = "http://127.0.0.1:11434"
+
+    imported = client.put("/api/settings/config", json={"config": payload})
+    assert imported.status_code == 200
+    body = imported.json()
+    assert body["appearance"]["light_theme"] == "vscode_light"
+    assert body["ui"]["default_gating_mode"] == "bind_all"
+    assert body["llm_providers"][1]["base_url"] == "http://127.0.0.1:11434"
+
+    rejected = client.put("/api/settings/config", json={"config": {"appearance": "bad"}})
+    assert rejected.status_code == 400

@@ -98,8 +98,28 @@ to keep early-iteration context small.
 - Backend: `stream_tool_events` + `agent_traces` + `usage_telemetry` → live agent-step trace
   (which tool, gradually) and per-message footer (tokens in/out/total, time elapsed, tok/s, model,
   timestamp). Verbose-trace toggle in Settings.
-- Web UI: sessions **sidebar** + chat area + message cards, adopting reference theme tokens.
-  Settings: **LLM Providers tab now**; Appearance/theme tab later.
+- Web UI: keep the frontend **vanilla** (`index.html` + `app.js` + `styles.css`), no framework
+  rewrite. Reuse the reference app's visual structure and interactions, not its rover-specific data
+  or React-era assumptions.
+- App shell: shared **top navigation** with page-like `AI Chat` and `Settings` views. We may show
+  non-functional reference nav items as placeholders for visual parity, but only `AI Chat` and
+  `Settings` are live destinations in this repo.
+- AI Chat: present the conversation as a dedicated page with a header block, sessions rail/list,
+  provider/model controls, message cards, and composer matching the reference layout style. Reuse
+  the current session/chat APIs and message data; do not seed fake conversations.
+- Settings: present as a dedicated page with sub-tabs for `Appearance`, `AI Settings`,
+  `LLM Providers`, `RAG`, and `Config I/O`.
+- Appearance tab: fully own **theme settings** for the web UI (color/accent/surface choices)
+  through persisted UI config and CSS custom properties.
+- AI Settings tab: hold current assistant behavior defaults such as tool gating and verbose trace.
+- LLM Providers tab: keep the existing provider/config backend, but move to a reference-style
+  provider-management flow with template selection, add/edit/save actions, enable toggle, and a
+  configured-provider registry/list.
+- RAG tab: explicit placeholder only. No retrieval backend is introduced unless product scope
+  changes; this keeps the current non-goal intact while matching the reference information
+  architecture.
+- Config I/O tab: import/export the **JSON config file only**. Secrets stay outside exported config
+  and continue to live in env vars or the SQLite `SecretStore`.
 - CLI: thin client mirroring the same footer.
 
 ## Graceful degradation

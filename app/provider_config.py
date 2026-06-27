@@ -4,14 +4,24 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from .config import AppConfig, save_config
+from .config import (
+    APPEARANCE_DARK_THEMES,
+    APPEARANCE_LIGHT_THEMES,
+    APPEARANCE_THEME_MODES,
+    AppConfig,
+    DEFAULT_SETTINGS,
+    save_config,
+)
 
 SUPPORTED_PROVIDER_TYPES = {
     "openai",
     "anthropic",
     "google_gemini",
     "mistral",
+    "cohere",
     "groq",
+    "huggingface",
+    "nvidia_nim",
     "ollama",
     "openai_compatible",
     "openrouter",
@@ -33,8 +43,16 @@ def normalize_provider(provider: dict[str, Any]) -> dict[str, Any]:
         "auth_mode": str(provider.get("auth_mode", "env_var")).strip(),
         "secret_ref": str(provider.get("secret_ref", "")).strip(),
         "base_url": str(provider.get("base_url", "")).strip(),
+        "context_window": None,
+        "capabilities": [],
         "enabled": bool(provider.get("enabled", True)),
     }
+    raw_context_window = provider.get("context_window")
+    if raw_context_window not in ("", None):
+        normalized["context_window"] = int(raw_context_window)
+    raw_capabilities = provider.get("capabilities", [])
+    if isinstance(raw_capabilities, list):
+        normalized["capabilities"] = [str(item).strip() for item in raw_capabilities if str(item).strip()]
     if not normalized["id"]:
         raise ValueError("Provider id is required.")
     if not normalized["display_name"]:
@@ -47,6 +65,8 @@ def normalize_provider(provider: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Unsupported auth_mode '{normalized['auth_mode']}'.")
     if normalized["auth_mode"] == "none":
         normalized["secret_ref"] = ""
+    if normalized["context_window"] is not None and normalized["context_window"] < 0:
+        raise ValueError("context_window must be >= 0.")
     return normalized
 
 
@@ -119,6 +139,76 @@ def update_ui_settings(
     updated = copy.deepcopy(config.raw)
     updated["ui"] = normalize_ui_settings(ui)
     return save_config(AppConfig(raw=updated, settings_path=config.settings_path))
+
+
+def normalize_appearance(appearance: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(appearance, dict):
+        raise ValueError("appearance must be an object.")
+    theme_mode = str(appearance.get("theme_mode", "light")).strip().lower()
+    light_theme = str(appearance.get("light_theme", "quiet_light")).strip().lower()
+    dark_theme = str(appearance.get("dark_theme", "vscode_dark")).strip().lower()
+    if theme_mode not in APPEARANCE_THEME_MODES:
+        raise ValueError(f"Unsupported theme_mode '{theme_mode}'.")
+    if light_theme not in APPEARANCE_LIGHT_THEMES:
+        raise ValueError(f"Unsupported light_theme '{light_theme}'.")
+    if dark_theme not in APPEARANCE_DARK_THEMES:
+        raise ValueError(f"Unsupported dark_theme '{dark_theme}'.")
+    return {
+        "theme_mode": theme_mode,
+        "light_theme": light_theme,
+        "dark_theme": dark_theme,
+    }
+
+
+def update_appearance_settings(
+    config: AppConfig,
+    *,
+    appearance: dict[str, Any],
+) -> AppConfig:
+    updated = copy.deepcopy(config.raw)
+    updated["appearance"] = normalize_appearance(appearance)
+    return save_config(AppConfig(raw=updated, settings_path=config.settings_path))
+
+
+def export_config_payload(config: AppConfig) -> dict[str, Any]:
+    return {
+        "llm_providers": normalize_provider_list(copy.deepcopy(config.llm_providers)),
+        "model_routing": normalize_model_routing(copy.deepcopy(config.model_routing), {provider["id"] for provider in config.llm_providers}),
+        "data": copy.deepcopy(config.raw.get("data", DEFAULT_SETTINGS["data"])),
+        "logging": copy.deepcopy(config.raw.get("logging", DEFAULT_SETTINGS["logging"])),
+        "server": copy.deepcopy(config.raw.get("server", DEFAULT_SETTINGS["server"])),
+        "ui": normalize_ui_settings(copy.deepcopy(config.raw.get("ui", DEFAULT_SETTINGS["ui"]))),
+        "appearance": normalize_appearance(copy.deepcopy(config.raw.get("appearance", DEFAULT_SETTINGS["appearance"]))),
+    }
+
+
+def normalize_imported_config(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("config must be an object.")
+    providers = normalize_provider_list(payload.get("llm_providers", []))
+    provider_ids = {provider["id"] for provider in providers}
+    normalized = {
+        "llm_providers": providers,
+        "model_routing": normalize_model_routing(payload.get("model_routing", {}), provider_ids),
+        "data": copy.deepcopy(payload.get("data", DEFAULT_SETTINGS["data"])),
+        "logging": copy.deepcopy(payload.get("logging", DEFAULT_SETTINGS["logging"])),
+        "server": copy.deepcopy(payload.get("server", DEFAULT_SETTINGS["server"])),
+        "ui": normalize_ui_settings(payload.get("ui", DEFAULT_SETTINGS["ui"])),
+        "appearance": normalize_appearance(payload.get("appearance", DEFAULT_SETTINGS["appearance"])),
+    }
+    for section in ("data", "logging", "server"):
+        if not isinstance(normalized[section], dict):
+            raise ValueError(f"{section} must be an object.")
+    return normalized
+
+
+def import_config_payload(
+    config: AppConfig,
+    *,
+    payload: dict[str, Any],
+) -> AppConfig:
+    normalized = normalize_imported_config(payload)
+    return save_config(AppConfig(raw=normalized, settings_path=config.settings_path))
 
 
 def redact_provider(provider: dict[str, Any], *, has_secret: bool | None = None) -> dict[str, Any]:

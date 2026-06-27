@@ -102,6 +102,23 @@ class SessionStore:
         summary["messages"] = messages
         return summary
 
+    def update_session_title(self, session_id: str, *, title: str) -> None:
+        next_title = " ".join(str(title or "").split()) or "New chat"
+        with self._connect() as conn:
+            result = conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (next_title, session_id),
+            )
+            if result.rowcount == 0:
+                raise KeyError(f"Unknown session '{session_id}'.")
+
+    def delete_session(self, session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            result = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            if result.rowcount == 0:
+                raise KeyError(f"Unknown session '{session_id}'.")
+
     def append_turn(
         self,
         session_id: str,

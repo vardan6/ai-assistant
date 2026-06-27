@@ -18,7 +18,14 @@ from .ai.provider_registry import evict_model_cache
 from .ai.session_store import SessionStore
 from .config import AppConfig, load_config
 from .pipeline import Pipeline, PipelineAnswer
-from .provider_config import redact_provider, update_provider_settings, update_ui_settings
+from .provider_config import (
+    export_config_payload,
+    import_config_payload,
+    redact_provider,
+    update_appearance_settings,
+    update_provider_settings,
+    update_ui_settings,
+)
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -34,6 +41,10 @@ class SessionCreateRequest(BaseModel):
     title: str = "New chat"
 
 
+class SessionUpdateRequest(BaseModel):
+    title: str = "New chat"
+
+
 class SecretWriteRequest(BaseModel):
     value: str = Field(default="", min_length=0)
 
@@ -46,6 +57,16 @@ class ProviderSettingsRequest(BaseModel):
 class UISettingsRequest(BaseModel):
     default_gating_mode: str = "gated"
     verbose_trace: bool = True
+
+
+class AppearanceSettingsRequest(BaseModel):
+    theme_mode: str = "light"
+    light_theme: str = "quiet_light"
+    dark_theme: str = "vscode_dark"
+
+
+class ConfigImportRequest(BaseModel):
+    config: dict[str, Any]
 
 
 def create_app(
@@ -135,6 +156,56 @@ def create_app(
             "verbose_trace": cfg.verbose_trace,
         }
 
+    @app.get("/api/settings/appearance")
+    def get_appearance_settings() -> dict[str, Any]:
+        return cfg.appearance
+
+    @app.put("/api/settings/appearance")
+    def put_appearance_settings(request: AppearanceSettingsRequest) -> dict[str, Any]:
+        nonlocal cfg
+        try:
+            cfg = update_appearance_settings(
+                cfg,
+                appearance={
+                    "theme_mode": request.theme_mode,
+                    "light_theme": request.light_theme,
+                    "dark_theme": request.dark_theme,
+                },
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return cfg.appearance
+
+    @app.get("/api/settings/config")
+    def get_config_payload() -> dict[str, Any]:
+        return {"config": export_config_payload(cfg)}
+
+    @app.put("/api/settings/config")
+    def put_config_payload(request: ConfigImportRequest) -> dict[str, Any]:
+        nonlocal cfg, live_pipeline, secrets, sessions
+        try:
+            cfg = import_config_payload(cfg, payload=request.config)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        secrets = SecretStore(cfg.llm_secrets_db_path)
+        sessions = SessionStore(cfg.ai_sessions_db_path)
+        evict_model_cache()
+        live_pipeline = Pipeline(cfg, secret_resolver=secrets.get)
+        providers = [
+            redact_provider(provider, has_secret=_has_secret(secrets, provider))
+            for provider in cfg.llm_providers
+        ]
+        return {
+            "config": export_config_payload(cfg),
+            "llm_providers": providers,
+            "model_routing": cfg.model_routing,
+            "ui": {
+                "default_gating_mode": cfg.default_gating_mode,
+                "verbose_trace": cfg.verbose_trace,
+            },
+            "appearance": cfg.appearance,
+        }
+
     @app.put("/api/settings/secrets/{secret_ref}")
     def put_secret(secret_ref: str, request: SecretWriteRequest) -> dict[str, Any]:
         secrets.set(secret_ref, request.value)
@@ -155,10 +226,26 @@ def create_app(
     def create_session(request: SessionCreateRequest) -> dict[str, Any]:
         return sessions.create_session(title=request.title)
 
+    @app.patch("/api/sessions/{session_id}")
+    def update_session(session_id: str, request: SessionUpdateRequest) -> dict[str, Any]:
+        try:
+            sessions.update_session_title(session_id, title=request.title)
+            return sessions.get_session_summary(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: str) -> dict[str, Any]:
         try:
             return sessions.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, Any]:
+        try:
+            sessions.delete_session(session_id)
+            return {"deleted": True, "session_id": session_id}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

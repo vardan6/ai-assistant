@@ -70,7 +70,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "default_gating_mode": "gated",
         "verbose_trace": True,
     },
+    "appearance": {
+        "theme_mode": "light",
+        "light_theme": "quiet_light",
+        "dark_theme": "vscode_dark",
+    },
 }
+
+APPEARANCE_THEME_MODES = {"light", "dark", "system"}
+APPEARANCE_LIGHT_THEMES = {"vscode_light", "quiet_light", "cool_light", "sandstone_light"}
+APPEARANCE_DARK_THEMES = {"vscode_dark", "graphite_dark", "midnight_dark", "amber_dark"}
 
 
 def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -155,6 +164,20 @@ class AppConfig:
     @property
     def verbose_trace(self) -> bool:
         return bool(self.ui.get("verbose_trace", True))
+
+    @property
+    def appearance(self) -> dict[str, Any]:
+        section = self.raw.get("appearance", {})
+        merged = copy.deepcopy(DEFAULT_SETTINGS["appearance"])
+        if isinstance(section, dict):
+            merged.update({k: v for k, v in section.items() if k in merged})
+        if str(merged.get("theme_mode")) not in APPEARANCE_THEME_MODES:
+            merged["theme_mode"] = "light"
+        if str(merged.get("light_theme")) not in APPEARANCE_LIGHT_THEMES:
+            merged["light_theme"] = "quiet_light"
+        if str(merged.get("dark_theme")) not in APPEARANCE_DARK_THEMES:
+            merged["dark_theme"] = "vscode_dark"
+        return merged
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
