@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
+import shutil
+import zipfile
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -9,7 +14,7 @@ from fastapi.testclient import TestClient
 from app.ai import AgentResult, TelemetrySummary, ToolCallRecord, TraceEvent, UsageSnapshot
 from app.ai.secret_store import SecretStore
 from app.ai.session_store import SessionStore
-from app.config import AppConfig, DEFAULT_SETTINGS, load_config
+from app.config import AppConfig, DEFAULT_SETTINGS, ROOT_DIR, load_config
 from app.pipeline import Pipeline, PipelineAnswer
 from app.provider_config import export_config_payload, import_config_payload, update_provider_settings
 from app.server import create_app
@@ -64,6 +69,7 @@ def test_config_export_import_round_trip(tmp_path):
     exported["appearance"]["light_theme"] = "cool_light"
     exported["ui"]["verbose_trace"] = False
     exported["llm_providers"][0]["model_id"] = "gpt-4.1-mini"
+    exported["data"]["csv_files"] = {"plants": "input/custom/plants.csv"}
     imported = import_config_payload(config, payload=exported)
 
     reloaded = load_config(imported.settings_path)
@@ -71,6 +77,8 @@ def test_config_export_import_round_trip(tmp_path):
     assert reloaded.appearance["light_theme"] == "cool_light"
     assert reloaded.verbose_trace is False
     assert reloaded.llm_providers[0]["model_id"] == "gpt-4.1-mini"
+    assert reloaded.csv_files == {"plants": "input/custom/plants.csv"}
+    assert reloaded.resolved_csv_paths()["plants"].as_posix().endswith("input/custom/plants.csv")
 
 
 def test_pipeline_returns_telemetry_and_trace(monkeypatch):
@@ -210,6 +218,10 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     assert 'id="provider-display-name"' in index.text
     assert 'id="providers-registry-pill"' in index.text
     assert 'id="appearance-theme-mode"' in index.text
+    assert 'id="dataset-settings-form"' in index.text
+    assert 'id="dataset-import-zip-button"' in index.text
+    assert 'data-dataset-upload-table="plants"' in index.text
+    assert 'data-subtab="dataset"' in index.text
     assert 'value="sandstone_light"' in index.text
     assert 'data-prompt="Which plants are offline today?"' in index.text
     assert 'src="/assets/app.js"' in index.text
@@ -221,6 +233,9 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     assert "function renderCommandMenu()" in app_js.text
     assert "function updateChatControlSummaries()" in app_js.text
     assert "function renderProviderRegistry()" in app_js.text
+    assert "function renderDatasetSettings()" in app_js.text
+    assert "function uploadDatasetTable(tableName)" in app_js.text
+    assert "function importDatasetZip()" in app_js.text
 
     styles = client.get("/assets/styles.css")
     assert styles.status_code == 200
@@ -229,6 +244,161 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     assert ".appearance-reference-card" in styles.text
     assert ".provider-registry-table" in styles.text
     assert ".command-menu" in styles.text
+    assert ".dataset-settings-card" in styles.text
+
+
+def test_dataset_settings_save_reload_reset_are_atomic(tmp_path):
+    default_dir = ROOT_DIR / "input" / "tables-extracted"
+    alt_dir = tmp_path / "alt-dataset"
+    shutil.copytree(default_dir, alt_dir)
+    custom_plants = tmp_path / "plants-custom.csv"
+    shutil.copy2(alt_dir / "plants.csv", custom_plants)
+
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    session_store = SessionStore(tmp_path / "sessions.sqlite3")
+    secret_store = SecretStore(tmp_path / "secrets.sqlite3")
+    client = TestClient(create_app(config=config, session_store=session_store, secret_store=secret_store))
+
+    initial = client.get("/api/settings/dataset")
+    assert initial.status_code == 200
+    assert initial.json()["config"]["csv_dir"] == "input/tables-extracted"
+
+    saved = client.put(
+        "/api/settings/dataset",
+        json={
+            "csv_dir": str(alt_dir),
+            "csv_files": {"plants": str(custom_plants)},
+        },
+    )
+    assert saved.status_code == 200
+    payload = saved.json()
+    assert payload["config"]["csv_dir"] == str(alt_dir)
+    plants_entry = next(item for item in payload["status"]["tables"] if item["name"] == "plants")
+    assert plants_entry["override_path"] == str(custom_plants)
+    assert plants_entry["resolved_path"] == str(custom_plants)
+
+    reloaded = load_config(config.settings_path)
+    assert reloaded.csv_dir == alt_dir
+    assert reloaded.csv_files == {"plants": str(custom_plants)}
+
+    bad_dir = tmp_path / "missing-dataset"
+    bad_dir.mkdir()
+    failed = client.put(
+        "/api/settings/dataset",
+        json={
+            "csv_dir": str(bad_dir),
+            "csv_files": {},
+        },
+    )
+    assert failed.status_code == 400
+    assert "Dataset validation failed" in failed.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.csv_dir == alt_dir
+    assert unchanged.csv_files == {"plants": str(custom_plants)}
+
+    reload_response = client.post("/api/settings/dataset/reload")
+    assert reload_response.status_code == 200
+    assert reload_response.json()["config"]["csv_dir"] == str(alt_dir)
+
+    reset = client.post("/api/settings/dataset/reset")
+    assert reset.status_code == 200
+    assert reset.json()["config"]["csv_dir"] == "input/tables-extracted"
+    assert reset.json()["config"]["csv_files"] == {
+        "plants": "",
+        "inverters": "",
+        "generation_readings": "",
+        "weather_readings": "",
+        "alerts": "",
+        "anomalies": "",
+        "maintenance": "",
+    }
+
+
+def test_dataset_upload_and_zip_import_are_atomic(tmp_path):
+    default_dir = ROOT_DIR / "input" / "tables-extracted"
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    session_store = SessionStore(tmp_path / "sessions.sqlite3")
+    secret_store = SecretStore(tmp_path / "secrets.sqlite3")
+    client = TestClient(create_app(config=config, session_store=session_store, secret_store=secret_store))
+
+    custom_plants = tmp_path / "plants-upload.csv"
+    shutil.copy2(default_dir / "plants.csv", custom_plants)
+    uploaded = client.post(
+        "/api/settings/dataset/upload/plants",
+        json={
+            "filename": "plants.csv",
+            "content": custom_plants.read_text(encoding="utf-8"),
+        },
+    )
+    assert uploaded.status_code == 200
+    uploaded_payload = uploaded.json()
+    plants_entry = next(item for item in uploaded_payload["status"]["tables"] if item["name"] == "plants")
+    assert plants_entry["source"] == "override"
+    assert plants_entry["override_path"].startswith("data/managed_datasets/overrides/plants-")
+    assert Path(plants_entry["resolved_path"]).exists()
+
+    reloaded = load_config(config.settings_path)
+    assert reloaded.csv_files["plants"].startswith("data/managed_datasets/overrides/plants-")
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        for table_name in (
+            "plants",
+            "inverters",
+            "generation_readings",
+            "weather_readings",
+            "alerts",
+            "anomalies",
+            "maintenance",
+        ):
+            archive.write(default_dir / f"{table_name}.csv", arcname=f"nested/{table_name.upper()}.csv")
+        archive.writestr("nested/ignored.txt", "ignored")
+    archive_bytes.seek(0)
+
+    imported = client.post(
+        "/api/settings/dataset/import-zip",
+        json={
+            "filename": "dataset.zip",
+            "content_base64": base64.b64encode(archive_bytes.getvalue()).decode("ascii"),
+        },
+    )
+    assert imported.status_code == 200
+    imported_payload = imported.json()
+    assert imported_payload["config"]["csv_dir"].startswith("data/managed_datasets/imports/dataset-")
+    assert imported_payload["config"]["csv_files"] == {
+        "plants": "",
+        "inverters": "",
+        "generation_readings": "",
+        "weather_readings": "",
+        "alerts": "",
+        "anomalies": "",
+        "maintenance": "",
+    }
+
+    imported_config = load_config(config.settings_path)
+    assert imported_config.csv_dir_setting.startswith("data/managed_datasets/imports/dataset-")
+    assert imported_config.csv_files == {}
+
+    bad_archive = io.BytesIO()
+    with zipfile.ZipFile(bad_archive, "w") as archive:
+        for table_name in ("plants", "inverters", "generation_readings", "weather_readings", "alerts", "anomalies"):
+            archive.write(default_dir / f"{table_name}.csv", arcname=f"{table_name}.csv")
+    bad_archive.seek(0)
+
+    failed = client.post(
+        "/api/settings/dataset/import-zip",
+        json={
+            "filename": "broken.zip",
+            "content_base64": base64.b64encode(bad_archive.getvalue()).decode("ascii"),
+        },
+    )
+    assert failed.status_code == 400
+    assert "missing required CSVs" in failed.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.csv_dir_setting == imported_config.csv_dir_setting
+    assert unchanged.csv_files == {}
 
 
 def test_server_lists_and_executes_chat_commands(tmp_path):

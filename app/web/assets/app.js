@@ -14,6 +14,17 @@ const state = {
     light_theme: "quiet_light",
     dark_theme: "vscode_dark",
   },
+  dataset: {
+    config: {
+      csv_dir: "",
+      csv_files: {},
+    },
+    status: {
+      dataset_today: "",
+      csv_dir_resolved: "",
+      tables: [],
+    },
+  },
   selectedProviderId: "",
   gatingMode: "bind_all",
   sessionFilter: "active",
@@ -44,8 +55,17 @@ const state = {
 const APPEARANCE_STORAGE_KEY = "solar-ai-appearance";
 const UI_STATE_STORAGE_KEY = "solar-ai-ui-state";
 const VALID_VIEWS = new Set(["chat", "settings"]);
-const VALID_SUBTABS = new Set(["appearance", "ai", "providers", "rag", "config-io"]);
+const VALID_SUBTABS = new Set(["appearance", "ai", "providers", "rag", "dataset", "config-io"]);
 const VALID_GATING_MODES = new Set(["gated", "bind_all"]);
+const DATASET_TABLE_NAMES = [
+  "plants",
+  "inverters",
+  "generation_readings",
+  "weather_readings",
+  "alerts",
+  "anomalies",
+  "maintenance",
+];
 let uiStatePersistTimer = null;
 const THEME_PRESETS = {
   vscode_light: {
@@ -406,6 +426,17 @@ const dom = {
   configImportFile: document.querySelector("#config-import-file"),
   configImportText: document.querySelector("#config-import-text"),
   configImportFeedback: document.querySelector("#config-import-feedback"),
+  datasetSettingsForm: document.querySelector("#dataset-settings-form"),
+  datasetCsvDir: document.querySelector("#dataset-csv-dir"),
+  datasetReloadCurrent: document.querySelector("#dataset-reload-current"),
+  datasetResetDefaults: document.querySelector("#dataset-reset-defaults"),
+  datasetUploadButtons: Array.from(document.querySelectorAll("[data-dataset-upload-table]")),
+  datasetImportZip: document.querySelector("#dataset-import-zip"),
+  datasetImportZipButton: document.querySelector("#dataset-import-zip-button"),
+  datasetStatusToday: document.querySelector("#dataset-status-today"),
+  datasetStatusDir: document.querySelector("#dataset-status-dir"),
+  datasetSettingsFeedback: document.querySelector("#dataset-settings-feedback"),
+  datasetResolvedTableList: document.querySelector("#dataset-resolved-table-list"),
   emptyStateTemplate: document.querySelector("#empty-state-template"),
 };
 
@@ -441,6 +472,44 @@ function wireEvents() {
     saveAppearance().catch((error) => {
       console.error(error);
       setStatus(error.message || "Saving appearance failed.");
+    });
+  });
+  dom.datasetSettingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveDatasetSettings().catch((error) => {
+      console.error(error);
+      setStatus(error.message || "Saving dataset settings failed.");
+      setDatasetFeedback(error.message || "Saving dataset settings failed.", true);
+    });
+  });
+  dom.datasetReloadCurrent.addEventListener("click", () => {
+    reloadDatasetSettings().catch((error) => {
+      console.error(error);
+      setStatus(error.message || "Reloading dataset failed.");
+      setDatasetFeedback(error.message || "Reloading dataset failed.", true);
+    });
+  });
+  dom.datasetResetDefaults.addEventListener("click", () => {
+    resetDatasetSettings().catch((error) => {
+      console.error(error);
+      setStatus(error.message || "Resetting dataset failed.");
+      setDatasetFeedback(error.message || "Resetting dataset failed.", true);
+    });
+  });
+  dom.datasetUploadButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      uploadDatasetTable(button.dataset.datasetUploadTable || "").catch((error) => {
+        console.error(error);
+        setStatus(error.message || "Dataset upload failed.");
+        setDatasetFeedback(error.message || "Dataset upload failed.", true);
+      });
+    });
+  });
+  dom.datasetImportZipButton.addEventListener("click", () => {
+    importDatasetZip().catch((error) => {
+      console.error(error);
+      setStatus(error.message || "Dataset import failed.");
+      setDatasetFeedback(error.message || "Dataset import failed.", true);
     });
   });
   dom.providerSelect.addEventListener("change", () => {
@@ -642,12 +711,13 @@ async function initialize() {
   setStatus("Loading workspace");
   const storedUIState = readStoredUIState();
   const hashUIState = readHashUIState();
-  const [health, sessions, providersPayload, ui, appearance, commandsPayload] = await Promise.all([
+  const [health, sessions, providersPayload, ui, appearance, dataset, commandsPayload] = await Promise.all([
     api("/health"),
     api("/api/sessions"),
     api("/api/settings/providers"),
     api("/api/settings/ui"),
     api("/api/settings/appearance"),
+    api("/api/settings/dataset"),
     api("/api/chat/commands"),
   ]);
   state.health = health;
@@ -656,6 +726,7 @@ async function initialize() {
   state.modelRouting = providersPayload.model_routing || {};
   state.ui = ui;
   state.appearance = readStoredAppearance() || appearance;
+  state.dataset = dataset;
   state.commands = commandsPayload.commands || [];
   state.selectedProviderId = resolveStoredProviderSelection(storedUIState?.selectedProviderId);
   state.gatingMode = "bind_all";
@@ -677,6 +748,7 @@ async function initialize() {
   renderProviderSettings();
   renderUISettings();
   renderAppearance();
+  renderDatasetSettings();
   applyAppearance();
   updateTraceNote();
   updateActiveSessionMeta();
@@ -1781,6 +1853,33 @@ function renderAppearance() {
   dom.appearanceDarkTheme.value = state.appearance.dark_theme || "vscode_dark";
 }
 
+function renderDatasetSettings() {
+  const dataset = state.dataset || {};
+  const config = dataset.config || {};
+  const status = dataset.status || {};
+  const csvFiles = config.csv_files || {};
+  dom.datasetCsvDir.value = config.csv_dir || "";
+  DATASET_TABLE_NAMES.forEach((tableName) => {
+    const input = document.querySelector(`#dataset-file-${tableName}`);
+    if (input) {
+      input.value = csvFiles[tableName] || "";
+    }
+  });
+  dom.datasetStatusToday.textContent = status.dataset_today || "Unknown";
+  dom.datasetStatusDir.textContent = status.csv_dir_resolved || "Unknown";
+  const tables = Array.isArray(status.tables) ? status.tables : [];
+  dom.datasetResolvedTableList.innerHTML = tables.map((table) => `
+    <article class="dataset-table-card${table.exists ? "" : " is-missing"}">
+      <div class="dataset-table-card-top">
+        <strong>${escapeHtml(table.name)}.csv</strong>
+        <span class="panel-pill ${table.exists ? "panel-pill-info" : "panel-pill-warn"}">${table.exists ? table.source : "missing"}</span>
+      </div>
+      <code>${escapeHtml(table.resolved_path || "")}</code>
+    </article>
+  `).join("");
+  setDatasetFeedback(status.validation_error || "Loaded dataset settings.", Boolean(status.validation_error));
+}
+
 function applyAppearance() {
   const themeName = resolveThemeName();
   const preset = THEME_PRESETS[themeName] || THEME_PRESETS.quiet_light;
@@ -1847,6 +1946,88 @@ async function saveAppearance() {
   setStatus("Appearance saved");
 }
 
+async function saveDatasetSettings() {
+  const csv_files = {};
+  DATASET_TABLE_NAMES.forEach((tableName) => {
+    const input = document.querySelector(`#dataset-file-${tableName}`);
+    csv_files[tableName] = input ? input.value.trim() : "";
+  });
+  state.dataset = await api("/api/settings/dataset", {
+    method: "PUT",
+    body: JSON.stringify({
+      csv_dir: dom.datasetCsvDir.value.trim(),
+      csv_files,
+    }),
+  });
+  renderDatasetSettings();
+  setDatasetFeedback("Dataset paths saved and reloaded.", false);
+  setStatus("Dataset reloaded");
+}
+
+async function reloadDatasetSettings() {
+  state.dataset = await api("/api/settings/dataset/reload", {
+    method: "POST",
+  });
+  renderDatasetSettings();
+  setDatasetFeedback("Current dataset reloaded.", false);
+  setStatus("Dataset reloaded");
+}
+
+async function resetDatasetSettings() {
+  state.dataset = await api("/api/settings/dataset/reset", {
+    method: "POST",
+  });
+  renderDatasetSettings();
+  setDatasetFeedback("Dataset settings reset to defaults.", false);
+  setStatus("Dataset reset");
+}
+
+async function uploadDatasetTable(tableName) {
+  if (!DATASET_TABLE_NAMES.includes(tableName)) {
+    throw new Error(`Unknown dataset table "${tableName}".`);
+  }
+  const input = document.querySelector(`#dataset-upload-${tableName}`);
+  const file = input?.files?.[0];
+  if (!file) {
+    throw new Error(`Choose a CSV file for ${tableName}.csv first.`);
+  }
+  const content = await file.text();
+  state.dataset = await api(`/api/settings/dataset/upload/${encodeURIComponent(tableName)}`, {
+    method: "POST",
+    body: JSON.stringify({
+      filename: file.name,
+      content,
+    }),
+  });
+  if (input) {
+    input.value = "";
+  }
+  renderDatasetSettings();
+  setDatasetFeedback(`${tableName}.csv uploaded and activated.`, false);
+  setStatus("Dataset reloaded");
+}
+
+async function importDatasetZip() {
+  const file = dom.datasetImportZip?.files?.[0];
+  if (!file) {
+    throw new Error("Choose a dataset .zip file first.");
+  }
+  const content_base64 = await fileToBase64(file);
+  state.dataset = await api("/api/settings/dataset/import-zip", {
+    method: "POST",
+    body: JSON.stringify({
+      filename: file.name,
+      content_base64,
+    }),
+  });
+  if (dom.datasetImportZip) {
+    dom.datasetImportZip.value = "";
+  }
+  renderDatasetSettings();
+  setDatasetFeedback("Dataset zip imported and activated.", false);
+  setStatus("Dataset reloaded");
+}
+
 function resolveThemeName() {
   const mode = state.appearance.theme_mode || "light";
   if (mode === "system") {
@@ -1885,6 +2066,23 @@ function writeStoredAppearance(appearance) {
   } catch {
     // Ignore local storage write failures.
   }
+}
+
+async function fileToBase64(file) {
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function setDatasetFeedback(message, isError) {
+  dom.datasetSettingsFeedback.textContent = message;
+  dom.datasetSettingsFeedback.classList.toggle("is-error", Boolean(isError));
 }
 
 function readStoredUIState() {
@@ -2186,12 +2384,14 @@ async function importConfigPayload() {
   state.modelRouting = response.model_routing || {};
   state.ui = response.ui || state.ui;
   state.appearance = response.appearance || state.appearance;
+  state.dataset = await api("/api/settings/dataset");
   state.gatingMode = "bind_all";
   ensureProviderSelectionAfterRefresh();
   renderProviderControls();
   renderProviderSettings();
   renderUISettings();
   renderAppearance();
+  renderDatasetSettings();
   applyAppearance();
   updateTraceNote();
   persistUIState();
@@ -2458,8 +2658,13 @@ function defaultProviderOptionLabel() {
 }
 
 async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (!isFormData && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers,
     ...options,
   });
   if (!response.ok) {

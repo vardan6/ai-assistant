@@ -79,7 +79,7 @@ class Pipeline:
     def __init__(self, config: AppConfig, *, secret_resolver: Callable[[str], str] | None = None):
         self._config = config
         self._secret_resolver = secret_resolver
-        self._data = PandasDataSource(config.csv_dir)
+        self._data = PandasDataSource(config.resolved_csv_paths())
         self._registry = build_registry()
         self._intent_service = IntentService()
         self._context = ToolContext(data=self._data)

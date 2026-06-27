@@ -5,6 +5,7 @@ the model. This class only owns loading + the dataset-today anchor.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -31,15 +32,21 @@ _READING_TABLES: tuple[str, ...] = ("generation_readings", "weather_readings")
 class PandasDataSource:
     """In-memory pandas-backed implementation of the DataSource protocol."""
 
-    def __init__(self, csv_dir: str | Path):
-        self._csv_dir = Path(csv_dir)
+    def __init__(self, csv_dir: str | Path | Mapping[str, str | Path]):
+        self._csv_dir: Path | None = None
+        self._table_paths: dict[str, Path] = {}
+        if isinstance(csv_dir, Mapping):
+            self._table_paths = {name: Path(path) for name, path in csv_dir.items()}
+        else:
+            self._csv_dir = Path(csv_dir)
+            self._table_paths = {name: self._csv_dir / f"{name}.csv" for name in TABLE_NAMES}
         self._tables: dict[str, pd.DataFrame] = {}
         self._dataset_today: datetime | None = None
         self._load()
 
     def _load(self) -> None:
         for name in TABLE_NAMES:
-            csv_path = self._csv_dir / f"{name}.csv"
+            csv_path = self._table_paths[name]
             if not csv_path.exists():
                 raise FileNotFoundError(f"Missing dataset CSV: {csv_path}")
             frame = pd.read_csv(csv_path)

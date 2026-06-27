@@ -1336,6 +1336,14 @@ textarea {
   min-width: 190px;
 }
 
+.field.field-actions {
+  justify-content: space-between;
+}
+
+.field.field-actions .button {
+  align-self: flex-start;
+}
+
 .field span,
 .checkbox-row span,
 .hint {
@@ -1483,6 +1491,7 @@ textarea {
 
 .provider-form-grid,
 .provider-routing-grid,
+.dataset-grid,
 .config-io-grid {
   display: grid;
   gap: 18px;
@@ -1494,6 +1503,10 @@ textarea {
 }
 
 .provider-routing-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dataset-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -1669,6 +1682,56 @@ textarea {
   place-items: start;
 }
 
+.dataset-settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.dataset-status-shell {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dataset-status-meta,
+.dataset-table-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 94%, white 6%);
+  min-width: 0;
+}
+
+.dataset-status-meta code,
+.dataset-table-card code {
+  display: block;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--ink) 92%, transparent 8%);
+  overflow-wrap: anywhere;
+}
+
+.dataset-resolved-table-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dataset-table-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dataset-table-card.is-missing {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line) 66%);
+}
+
 .config-io-grid .routing-card {
   height: 100%;
 }
@@ -1739,6 +1802,9 @@ textarea {
 
   .provider-form-grid,
   .provider-routing-grid,
+  .dataset-grid,
+  .dataset-status-shell,
+  .dataset-resolved-table-list,
   .config-io-grid {
     grid-template-columns: 1fr;
   }

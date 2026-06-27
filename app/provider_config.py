@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_SETTINGS,
     save_config,
 )
+from .data.source import TABLE_NAMES
 
 SUPPORTED_PROVIDER_TYPES = {
     "openai",
@@ -170,11 +171,54 @@ def update_appearance_settings(
     return save_config(AppConfig(raw=updated, settings_path=config.settings_path))
 
 
+def normalize_data_settings(data: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError("data must be an object.")
+    csv_dir = str(data.get("csv_dir", DEFAULT_SETTINGS["data"]["csv_dir"])).strip()
+    if not csv_dir:
+        raise ValueError("data.csv_dir is required.")
+    raw_csv_files = data.get("csv_files", {})
+    if raw_csv_files in (None, ""):
+        raw_csv_files = {}
+    if not isinstance(raw_csv_files, dict):
+        raise ValueError("data.csv_files must be an object.")
+    unknown_tables = sorted(set(raw_csv_files) - set(TABLE_NAMES))
+    if unknown_tables:
+        raise ValueError(f"Unknown dataset table overrides: {', '.join(unknown_tables)}.")
+    csv_files: dict[str, str] = {}
+    for table_name in TABLE_NAMES:
+        value = str(raw_csv_files.get(table_name, "")).strip()
+        if value:
+            csv_files[table_name] = value
+    return {
+        "csv_dir": csv_dir,
+        "csv_files": csv_files,
+    }
+
+
+def prepare_dataset_settings(
+    config: AppConfig,
+    *,
+    data: dict[str, Any],
+) -> AppConfig:
+    updated = copy.deepcopy(config.raw)
+    updated["data"] = normalize_data_settings(data)
+    return AppConfig(raw=updated, settings_path=config.settings_path)
+
+
+def update_dataset_settings(
+    config: AppConfig,
+    *,
+    data: dict[str, Any],
+) -> AppConfig:
+    return save_config(prepare_dataset_settings(config, data=data))
+
+
 def export_config_payload(config: AppConfig) -> dict[str, Any]:
     return {
         "llm_providers": normalize_provider_list(copy.deepcopy(config.llm_providers)),
         "model_routing": normalize_model_routing(copy.deepcopy(config.model_routing), {provider["id"] for provider in config.llm_providers}),
-        "data": copy.deepcopy(config.raw.get("data", DEFAULT_SETTINGS["data"])),
+        "data": normalize_data_settings(copy.deepcopy(config.raw.get("data", DEFAULT_SETTINGS["data"]))),
         "logging": copy.deepcopy(config.raw.get("logging", DEFAULT_SETTINGS["logging"])),
         "server": copy.deepcopy(config.raw.get("server", DEFAULT_SETTINGS["server"])),
         "ui": normalize_ui_settings(copy.deepcopy(config.raw.get("ui", DEFAULT_SETTINGS["ui"]))),
@@ -190,7 +234,7 @@ def normalize_imported_config(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = {
         "llm_providers": providers,
         "model_routing": normalize_model_routing(payload.get("model_routing", {}), provider_ids),
-        "data": copy.deepcopy(payload.get("data", DEFAULT_SETTINGS["data"])),
+        "data": normalize_data_settings(payload.get("data", DEFAULT_SETTINGS["data"])),
         "logging": copy.deepcopy(payload.get("logging", DEFAULT_SETTINGS["logging"])),
         "server": copy.deepcopy(payload.get("server", DEFAULT_SETTINGS["server"])),
         "ui": normalize_ui_settings(payload.get("ui", DEFAULT_SETTINGS["ui"])),

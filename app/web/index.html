@@ -133,6 +133,7 @@
             <button class="subtab" type="button" data-subtab="ai">AI Settings</button>
             <button class="subtab" type="button" data-subtab="providers">Add LLM Provider</button>
             <button class="subtab" type="button" data-subtab="rag">RAG</button>
+            <button class="subtab" type="button" data-subtab="dataset">Dataset</button>
             <button class="subtab" type="button" data-subtab="config-io">Config I/O</button>
           </nav>
 
@@ -342,6 +343,152 @@
                 <h2>RAG</h2>
                 <p class="panel-note">No retrieval backend is wired up in this build. This section mirrors the reference information architecture and is intentionally a placeholder.</p>
               </div>
+            </section>
+
+            <section id="subtab-dataset" class="subview">
+              <form id="dataset-settings-form" class="routing-card dataset-settings-card">
+                <div class="section-head">
+                  <div>
+                    <p class="eyebrow">Active Dataset</p>
+                    <h2>Dataset</h2>
+                    <p class="panel-note">Server-side paths only. Save validates all 7 CSVs before the live pipeline switches over.</p>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>Base CSV directory</span>
+                  <input id="dataset-csv-dir" type="text" placeholder="input/tables-extracted">
+                </label>
+
+                <div class="dataset-grid">
+                  <label class="field">
+                    <span>plants.csv override</span>
+                    <input id="dataset-file-plants" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>inverters.csv override</span>
+                    <input id="dataset-file-inverters" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>generation_readings.csv override</span>
+                    <input id="dataset-file-generation_readings" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>weather_readings.csv override</span>
+                    <input id="dataset-file-weather_readings" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>alerts.csv override</span>
+                    <input id="dataset-file-alerts" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>anomalies.csv override</span>
+                    <input id="dataset-file-anomalies" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>maintenance.csv override</span>
+                    <input id="dataset-file-maintenance" type="text" placeholder="Optional override path">
+                  </label>
+                </div>
+
+                <div class="settings-actions">
+                  <button class="button button-primary" type="submit">Save Paths</button>
+                  <button id="dataset-reload-current" class="button" type="button">Reload Current Dataset</button>
+                  <button id="dataset-reset-defaults" class="button" type="button">Reset to Defaults</button>
+                </div>
+
+                <div class="dataset-grid">
+                  <label class="field">
+                    <span>Bulk dataset zip</span>
+                    <input id="dataset-import-zip" type="file" accept=".zip,application/zip">
+                  </label>
+                  <div class="field field-actions">
+                    <span>Bulk import activation</span>
+                    <button id="dataset-import-zip-button" class="button" type="button">Import Zip Dataset</button>
+                  </div>
+                </div>
+
+                <div class="dataset-resolved-table-list">
+                  <article class="dataset-table-card">
+                    <div class="dataset-table-card-top">
+                      <strong>Managed per-table uploads</strong>
+                      <span class="panel-pill panel-pill-info">CSV</span>
+                    </div>
+                    <div class="dataset-grid">
+                      <label class="field">
+                        <span>plants.csv upload</span>
+                        <input id="dataset-upload-plants" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate plants.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="plants">Upload plants.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>inverters.csv upload</span>
+                        <input id="dataset-upload-inverters" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate inverters.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="inverters">Upload inverters.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>generation_readings.csv upload</span>
+                        <input id="dataset-upload-generation_readings" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate generation_readings.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="generation_readings">Upload generation_readings.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>weather_readings.csv upload</span>
+                        <input id="dataset-upload-weather_readings" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate weather_readings.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="weather_readings">Upload weather_readings.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>alerts.csv upload</span>
+                        <input id="dataset-upload-alerts" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate alerts.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="alerts">Upload alerts.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>anomalies.csv upload</span>
+                        <input id="dataset-upload-anomalies" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate anomalies.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="anomalies">Upload anomalies.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>maintenance.csv upload</span>
+                        <input id="dataset-upload-maintenance" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate maintenance.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="maintenance">Upload maintenance.csv</button>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="dataset-status-shell">
+                  <div class="dataset-status-meta">
+                    <span class="panel-pill panel-pill-info">dataset today</span>
+                    <code id="dataset-status-today">Unknown</code>
+                  </div>
+                  <div class="dataset-status-meta">
+                    <span class="panel-pill">resolved base dir</span>
+                    <code id="dataset-status-dir">Unknown</code>
+                  </div>
+                </div>
+
+                <p id="dataset-settings-feedback" class="panel-note">Loaded dataset settings.</p>
+                <div id="dataset-resolved-table-list" class="dataset-resolved-table-list"></div>
+              </form>
             </section>
 
             <section id="subtab-config-io" class="subview">

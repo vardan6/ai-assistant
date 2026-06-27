@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .data.source import TABLE_NAMES
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = ROOT_DIR / "config" / "common.local.json"
 FALLBACK_SETTINGS_PATH = ROOT_DIR / "config" / "common.example.json"
@@ -57,6 +59,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "data": {
         "csv_dir": "input/tables-extracted",
+        "csv_files": {},
     },
     "logging": {
         "llm_secrets_db_path": "data/llm_secrets.sqlite3",
@@ -113,10 +116,36 @@ class AppConfig:
         return section if isinstance(section, dict) else {}
 
     @property
-    def csv_dir(self) -> Path:
+    def csv_dir_setting(self) -> str:
         configured = str(self.data.get("csv_dir", "input/tables-extracted")).strip()
-        path = Path(configured)
-        return path if path.is_absolute() else ROOT_DIR / path
+        return configured or "input/tables-extracted"
+
+    @property
+    def csv_dir(self) -> Path:
+        return _resolve_project_path(self.csv_dir_setting)
+
+    @property
+    def csv_files(self) -> dict[str, str]:
+        raw_csv_files = self.data.get("csv_files", {})
+        if not isinstance(raw_csv_files, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for table_name in TABLE_NAMES:
+            value = str(raw_csv_files.get(table_name, "")).strip()
+            if value:
+                normalized[table_name] = value
+        return normalized
+
+    def resolved_csv_paths(self) -> dict[str, Path]:
+        resolved: dict[str, Path] = {}
+        base_dir = self.csv_dir
+        for table_name in TABLE_NAMES:
+            override = self.csv_files.get(table_name, "")
+            if override:
+                resolved[table_name] = _resolve_project_path(override)
+            else:
+                resolved[table_name] = base_dir / f"{table_name}.csv"
+        return resolved
 
     @property
     def logging(self) -> dict[str, Any]:
@@ -203,3 +232,8 @@ def save_config(config: AppConfig, *, path: str | Path | None = None) -> AppConf
         json.dump(config.raw, fh, indent=2, sort_keys=True)
         fh.write("\n")
     return AppConfig(raw=copy.deepcopy(config.raw), settings_path=settings_path)
+
+
+def _resolve_project_path(configured: str) -> Path:
+    path = Path(configured)
+    return path if path.is_absolute() else ROOT_DIR / path
