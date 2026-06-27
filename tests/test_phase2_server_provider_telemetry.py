@@ -122,6 +122,7 @@ def test_pipeline_returns_telemetry_and_trace(monkeypatch):
     assert result.telemetry.intent_usage.total_tokens == 18
     assert result.telemetry.synthesis_usage.total_tokens == 30
     assert result.telemetry.total_usage.total_tokens == 48
+    assert result.stop_reason == "final_answer"
     assert [event.kind for event in result.trace_events] == [
         "intent_started",
         "intent_finished",
@@ -158,6 +159,7 @@ def test_server_streams_chat_and_persists_session(tmp_path):
                 gating_mode=gating_mode,
                 bound_tools=["plants"],
                 iterations=1,
+                stop_reason="final_answer",
                 trace_events=[],
                 telemetry=TelemetrySummary(
                     started_at="2026-06-27T00:00:00+00:00",
@@ -187,6 +189,7 @@ def test_server_streams_chat_and_persists_session(tmp_path):
     lines = [json.loads(line) for line in streamed.text.splitlines() if line.strip()]
     assert [line["type"] for line in lines] == ["trace", "trace", "final"]
     assert lines[-1]["response"]["answer"] == "One plant is offline."
+    assert lines[-1]["response"]["stop_reason"] == "final_answer"
 
     session = client.get(f"/api/sessions/{session_id}")
     assert session.status_code == 200
@@ -214,6 +217,8 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     app_js = client.get("/assets/app.js")
     assert app_js.status_code == 200
     assert "function sendMessage()" in app_js.text
+    assert "function executeCommand(commandText)" in app_js.text
+    assert "function renderCommandMenu()" in app_js.text
     assert "function updateChatControlSummaries()" in app_js.text
     assert "function renderProviderRegistry()" in app_js.text
 
@@ -223,6 +228,41 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     assert ".chat-workspace" in styles.text
     assert ".appearance-reference-card" in styles.text
     assert ".provider-registry-table" in styles.text
+    assert ".command-menu" in styles.text
+
+
+def test_server_lists_and_executes_chat_commands(tmp_path):
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    session_store = SessionStore(tmp_path / "sessions.sqlite3")
+    secret_store = SecretStore(tmp_path / "secrets.sqlite3")
+    client = TestClient(create_app(config=config, session_store=session_store, secret_store=secret_store))
+
+    commands = client.get("/api/chat/commands")
+    assert commands.status_code == 200
+    command_names = [item["name"] for item in commands.json()["commands"]]
+    assert command_names == ["context", "data", "tools"]
+
+    created = client.post("/api/sessions", json={"title": "Commands"})
+    session_id = created.json()["id"]
+
+    executed = client.post(
+        "/api/chat/commands/execute",
+        json={"command": "/tools", "session_id": session_id},
+    )
+    assert executed.status_code == 200
+    payload = executed.json()
+    assert payload["command"]["name"] == "tools"
+    assert payload["metadata"]["kind"] == "slash_command"
+    assert payload["metadata"]["tool_count"] >= 1
+    assert "Available tools" in payload["answer"]
+    assert "`plants`" in payload["answer"]
+
+    session = client.get(f"/api/sessions/{session_id}")
+    assert session.status_code == 200
+    body = session.json()
+    assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][0]["content"] == "/tools"
+    assert body["messages"][1]["metadata"]["command"]["name"] == "tools"
 
 
 def test_appearance_settings_round_trip(tmp_path):

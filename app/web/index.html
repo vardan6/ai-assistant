@@ -93,7 +93,7 @@
               </div>
 
               <div class="chat-shell-status">
-                <span id="chat-provider-summary" class="status-chip">Using routing default.</span>
+                <span id="chat-provider-summary" class="status-chip">Chat model pending.</span>
                 <span id="chat-gating-summary" class="status-chip status-chip-ready">Ready.</span>
                 <span id="active-session-meta" class="status-chip">No active chat yet.</span>
               </div>
@@ -106,6 +106,7 @@
                 <label class="field composer-field">
                   <span class="sr-only">Question</span>
                   <textarea id="question-input" rows="4" placeholder="Ask about the rover mission"></textarea>
+                  <div id="command-menu" class="command-menu" hidden aria-label="Slash commands"></div>
                 </label>
                 <div class="composer-foot">
                   <div class="composer-left">
@@ -120,6 +121,8 @@
                 </div>
               </form>
             </section>
+
+            <div id="workspace-bottom-resizer" class="pane-resizer pane-resizer-horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize chat workspace height" tabindex="0"></div>
 
           </section>
         </section>

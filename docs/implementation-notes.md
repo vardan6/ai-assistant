@@ -10,4 +10,10 @@
 - **No raw CSV rows in any LLM prompt.** Tools aggregate in pandas and return structured dicts.
 - **Tool gating is per-request** (`gated` | `bind_all`) — only the `bind_tools` list differs; the
   loop is identical. Gated must always include `plants`/`inverters` resolvers.
+- **Dataset settings are backend-path driven.** `data.csv_dir` + optional `data.csv_files` resolve
+  to one concrete file path per canonical table before dataset load; uploads only populate managed
+  backend files and write those paths back into config.
+- **Dataset reloads are atomic for new requests only.** Rebuild the pipeline only after validating
+  the full resolved dataset; keep the old pipeline alive for in-flight requests and on failed
+  reload attempts.
 </content>

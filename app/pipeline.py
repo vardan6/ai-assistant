@@ -64,6 +64,7 @@ class PipelineAnswer:
     bound_tools: list[str] = field(default_factory=list)
     fast_path: str = ""
     iterations: int = 0
+    stop_reason: str = ""
     provider_id: str = ""
     telemetry: TelemetrySummary = field(default_factory=lambda: TelemetrySummary(
         started_at=utc_now_iso(),
@@ -86,6 +87,10 @@ class Pipeline:
     @property
     def dataset_today(self):
         return self._data.dataset_today()
+
+    @property
+    def tool_registry(self):
+        return self._registry
 
     def answer(
         self,
@@ -139,6 +144,7 @@ class Pipeline:
                 trace_events=trace_events,
                 gating_mode=normalized_gating,
                 fast_path=fast_path,
+                stop_reason="fast_path",
                 provider_id=provider_id,
                 telemetry=_telemetry(
                     started_at=started_at,
@@ -156,6 +162,7 @@ class Pipeline:
                 trace_events=trace_events,
                 gating_mode=normalized_gating,
                 fast_path=fast_path,
+                stop_reason="out_of_scope",
                 provider_id=provider_id,
                 telemetry=_telemetry(
                     started_at=started_at,
@@ -192,6 +199,7 @@ class Pipeline:
             bound_tools=tool_names,
             fast_path=fast_path,
             iterations=result.iterations,
+            stop_reason=result.stop_reason,
             provider_id=provider_id,
             telemetry=_telemetry(
                 started_at=started_at,

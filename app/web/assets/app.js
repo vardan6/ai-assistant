@@ -24,6 +24,11 @@ const state = {
   isSending: false,
   abortController: null,
   lastQuestion: "",
+  commands: [],
+  commandMenu: {
+    items: [],
+    activeIndex: 0,
+  },
   providerEditor: {
     selectedIndex: -1,
     draft: null,
@@ -33,6 +38,7 @@ const state = {
     key: "display_name",
     direction: "asc",
   },
+  messageTraceOpen: {},
 };
 
 const APPEARANCE_STORAGE_KEY = "solar-ai-appearance";
@@ -328,6 +334,7 @@ const dom = {
   sessionsPane: document.querySelector("#sessions-pane"),
   sidebarResizer: document.querySelector("#sidebar-resizer"),
   composerResizer: document.querySelector("#composer-resizer"),
+  workspaceBottomResizer: document.querySelector("#workspace-bottom-resizer"),
   sessionsList: document.querySelector("#sessions-list"),
   sessionCount: document.querySelector("#session-count"),
   sessionSearch: document.querySelector("#session-search"),
@@ -338,6 +345,7 @@ const dom = {
   chatProviderSummary: document.querySelector("#chat-provider-summary"),
   chatGatingSummary: document.querySelector("#chat-gating-summary"),
   questionInput: document.querySelector("#question-input"),
+  commandMenu: document.querySelector("#command-menu"),
   composerForm: document.querySelector("#composer-form"),
   sendButton: document.querySelector("#send-button"),
   retryButton: document.querySelector("#retry-button"),
@@ -492,6 +500,9 @@ function wireEvents() {
     dom.questionInput.focus();
   });
   dom.questionInput.addEventListener("keydown", (event) => {
+    if (handleCommandMenuKeydown(event)) {
+      return;
+    }
     if (event.key !== "Enter" || event.isComposing) {
       return;
     }
@@ -509,6 +520,14 @@ function wireEvents() {
       renderMessages();
       updateComposerState();
     });
+  });
+  dom.questionInput.addEventListener("input", () => {
+    syncCommandMenu();
+  });
+  dom.questionInput.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      hideCommandMenu();
+    }, 120);
   });
   dom.composerForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -623,12 +642,13 @@ async function initialize() {
   setStatus("Loading workspace");
   const storedUIState = readStoredUIState();
   const hashUIState = readHashUIState();
-  const [health, sessions, providersPayload, ui, appearance] = await Promise.all([
+  const [health, sessions, providersPayload, ui, appearance, commandsPayload] = await Promise.all([
     api("/health"),
     api("/api/sessions"),
     api("/api/settings/providers"),
     api("/api/settings/ui"),
     api("/api/settings/appearance"),
+    api("/api/chat/commands"),
   ]);
   state.health = health;
   state.sessions = sessions.sessions || [];
@@ -636,6 +656,7 @@ async function initialize() {
   state.modelRouting = providersPayload.model_routing || {};
   state.ui = ui;
   state.appearance = readStoredAppearance() || appearance;
+  state.commands = commandsPayload.commands || [];
   state.selectedProviderId = resolveStoredProviderSelection(storedUIState?.selectedProviderId);
   state.gatingMode = "bind_all";
   state.sessionFilter = storedUIState?.sessionFilter === "archived" ? "archived" : "active";
@@ -643,6 +664,7 @@ async function initialize() {
   state.archivedSessionIds = new Set(Array.isArray(storedUIState?.archivedSessionIds) ? storedUIState.archivedSessionIds : []);
   state.sidebarWidth = clampSidebarWidth(storedUIState?.sidebarWidth);
   state.workspaceHeight = clampWorkspaceHeight(storedUIState?.workspaceHeight);
+  state.totalWorkspaceHeight = clampTotalWorkspaceHeight(storedUIState?.totalWorkspaceHeight);
   state.providerSort = resolveStoredProviderSort(storedUIState?.providerSort);
   restoreProviderEditorState(storedUIState?.providerEditor);
 
@@ -719,6 +741,10 @@ function renderSessions() {
         <span class="session-item-meta">${escapeHtml(formatSessionSummary(session))}</span>
         <span class="session-item-preview">${escapeHtml(buildSessionPreview(session))}</span>
       </button>
+      <div class="session-item-footer">
+        <span class="session-item-id-label">session id</span>
+        <code class="session-item-id" title="${escapeAttr(session.id)}">${escapeHtml(session.id)}</code>
+      </div>
     `;
     dom.sessionsList.appendChild(article);
   });
@@ -732,6 +758,7 @@ async function createSession(focusChat = false) {
   state.sessions.unshift(session);
   state.sessionId = session.id;
   state.messages = [];
+  state.messageTraceOpen = {};
   if (state.sessionFilter === "archived") {
     state.sessionFilter = "active";
   }
@@ -757,6 +784,7 @@ async function openSession(sessionId) {
     metadata: message.metadata || {},
     created_at: message.created_at || "",
   }));
+  state.messageTraceOpen = {};
   renderSessions();
   updateActiveSessionMeta();
   renderMessages();
@@ -810,31 +838,13 @@ function renderMessageCard(message, index) {
   body.className = "message-content";
   body.innerHTML = isPendingAssistant
     ? renderPendingAssistantMessage(message)
-    : formatMultiline(message.content || "");
+    : renderMarkdown(message.content || "");
   article.append(head, body);
 
   if (message.role === "assistant") {
     const metadata = message.metadata || {};
-    if (state.ui.verbose_trace && Array.isArray(metadata.trace_events) && metadata.trace_events.length > 0) {
-      const traceSection = document.createElement("details");
-      traceSection.className = "message-trace";
-      const title = document.createElement("summary");
-      title.className = "message-trace-summary";
-      title.textContent = "Activity";
-      const traceList = document.createElement("div");
-      traceList.className = "trace-list";
-      metadata.trace_events.forEach((event) => {
-        const traceItem = document.createElement("div");
-        traceItem.className = "trace-event";
-        traceItem.innerHTML = `
-          <div class="trace-kind">${escapeHtml(event.kind || "event")}</div>
-          <div><strong>${escapeHtml(event.message || "")}</strong></div>
-          <div>${escapeHtml(renderTraceDetails(event))}</div>
-        `;
-        traceList.appendChild(traceItem);
-      });
-      traceSection.append(title, traceList);
-      article.appendChild(traceSection);
+    if (state.ui.verbose_trace && shouldRenderAgentActivity(metadata)) {
+      article.appendChild(renderAgentActivity(metadata, message, index));
     }
 
     if (metadata.telemetry) {
@@ -850,6 +860,7 @@ function renderMetaRow(metadata) {
   const totalUsage = selectUsageSnapshot(telemetry);
   const elapsedMs = selectElapsedMs(metadata, telemetry);
   const iterations = Number(metadata.iterations || 0);
+  const toolCalls = Array.isArray(metadata.tool_calls) ? metadata.tool_calls : [];
   const fastPath = String(metadata.fast_path || "").trim();
   const hasUsage = totalUsage.input_tokens > 0 || totalUsage.output_tokens > 0 || totalUsage.total_tokens > 0;
   const hasRuntimeStats = elapsedMs > 0 || hasUsage || iterations > 0;
@@ -873,14 +884,239 @@ function renderMetaRow(metadata) {
     parts.push(`${elapsedMs} ms`);
   }
   if (hasUsage) {
-    parts.push(`${formatCompactNumber(totalUsage.input_tokens)} in`);
-    parts.push(`${formatCompactNumber(totalUsage.output_tokens)} out`);
+    parts.push(`↑${formatCompactNumber(totalUsage.input_tokens)}`);
+    parts.push(`↓${formatCompactNumber(totalUsage.output_tokens)} tok`);
+    const throughput = formatTokenThroughput(totalUsage.output_tokens, elapsedMs);
+    if (throughput) {
+      parts.push(`${throughput} tok/s`);
+    }
   }
   if (iterations > 0) {
     parts.push(`${iterations} iter`);
   }
-  row.innerHTML = parts.map((part) => `<span>${part}</span>`).join('<span>•</span>');
+  if (toolCalls.length > 0) {
+    parts.push("[tool_calls]");
+  }
+  row.innerHTML = parts.map((part) => `<span>${part}</span>`).join('<span>·</span>');
   return row;
+}
+
+function shouldRenderAgentActivity(metadata) {
+  const traceEvents = Array.isArray(metadata.trace_events) ? metadata.trace_events : [];
+  const toolCalls = Array.isArray(metadata.tool_calls) ? metadata.tool_calls : [];
+  const hasIteratedTrace = traceEvents.some((event) => Number(event.iteration || 0) > 0);
+  return toolCalls.length > 0 || hasIteratedTrace || Number(metadata.iterations || 0) > 0;
+}
+
+function renderAgentActivity(metadata, message, index) {
+  const activity = buildAgentActivityModel(metadata);
+  const section = document.createElement("details");
+  section.className = "message-trace";
+  section.dataset.messageIndex = String(index);
+  section.open = isAgentActivityOpen(message, index);
+  section.addEventListener("toggle", () => {
+    setAgentActivityOpen(message, index, section.open);
+  });
+  section.innerHTML = `
+    <summary class="message-trace-summary">
+      <span>Agent activity</span>
+      <span class="message-trace-summary-meta">
+        <span class="trace-status-pill${activity.pending ? " is-running" : ""}">${escapeHtml(activity.pending ? "RUNNING" : "COMPLETE")}</span>
+        <span>${activity.iterations.length} iteration${activity.iterations.length === 1 ? "" : "s"} · ${activity.toolCount} tool${activity.toolCount === 1 ? "" : "s"}</span>
+      </span>
+    </summary>
+  `;
+
+  const content = document.createElement("div");
+  content.className = "trace-list";
+
+  const runRow = document.createElement("div");
+  runRow.className = "trace-run-row";
+  runRow.innerHTML = `<span class="trace-run-dot"></span><span>Agent run</span>`;
+  content.appendChild(runRow);
+
+  activity.iterations.forEach((iteration) => {
+    const iterationBlock = document.createElement("section");
+    iterationBlock.className = "trace-iteration";
+    iterationBlock.innerHTML = `
+      <div class="trace-iteration-title">
+        <span class="trace-run-dot"></span>
+        <span>Iteration ${iteration.number}</span>
+      </div>
+    `;
+
+    const toolsWrap = document.createElement("div");
+    toolsWrap.className = "trace-tool-list";
+    if (iteration.tools.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "trace-empty";
+      empty.textContent = "no tools";
+      toolsWrap.appendChild(empty);
+    } else {
+      iteration.tools.forEach((tool) => {
+        const item = document.createElement("div");
+        item.className = `trace-tool-card${tool.pending ? " is-pending" : ""}`;
+        item.innerHTML = `
+          <div class="trace-tool-dot"></div>
+          <div class="trace-tool-name">${escapeHtml(tool.name || "tool")}</div>
+          <div class="trace-tool-meta">${escapeHtml(formatActivityToolMeta(tool))}</div>
+        `;
+        toolsWrap.appendChild(item);
+      });
+    }
+    iterationBlock.appendChild(toolsWrap);
+    content.appendChild(iterationBlock);
+  });
+
+  const doneRow = document.createElement("div");
+  doneRow.className = "trace-done-row";
+  doneRow.innerHTML = `
+    <span class="trace-run-dot"></span>
+    <span>Done · ${escapeHtml(activity.stopReason)}</span>
+  `;
+  content.appendChild(doneRow);
+
+  section.appendChild(content);
+  return section;
+}
+
+function buildAgentActivityModel(metadata) {
+  const toolCalls = Array.isArray(metadata.tool_calls) ? metadata.tool_calls : [];
+  const traceEvents = Array.isArray(metadata.trace_events) ? metadata.trace_events : [];
+  const pending = Boolean(metadata.pending);
+  const traceIterations = traceEvents
+    .map((event) => Number(event.iteration || 0))
+    .filter((value) => value > 0);
+  const toolIterations = toolCalls
+    .map((call) => Number(call.iteration || 0))
+    .filter((value) => value > 0);
+  const maxIteration = Math.max(
+    Number(metadata.iterations || 0),
+    traceIterations.length ? Math.max(...traceIterations) : 0,
+    toolIterations.length ? Math.max(...toolIterations) : 0,
+  );
+  const finalTools = groupCompletedToolsByIteration(toolCalls);
+  const liveTools = groupLiveToolsByIteration(traceEvents);
+  const iterations = [];
+  let toolCount = 0;
+
+  for (let iteration = 1; iteration <= Math.max(maxIteration, 1); iteration += 1) {
+    const tools = finalTools.get(iteration) || liveTools.get(iteration) || [];
+    toolCount += tools.length;
+    iterations.push({ number: iteration, tools });
+  }
+
+  return {
+    pending,
+    iterations,
+    toolCount,
+    stopReason: normalizeStopReason(metadata.stop_reason || inferStopReason(metadata)),
+  };
+}
+
+function groupCompletedToolsByIteration(toolCalls) {
+  const grouped = new Map();
+  toolCalls.forEach((call) => {
+    const iteration = Number(call.iteration || 0);
+    if (iteration <= 0) {
+      return;
+    }
+    if (!grouped.has(iteration)) {
+      grouped.set(iteration, []);
+    }
+    grouped.get(iteration).push({
+      name: call.name || "",
+      args: call.args && typeof call.args === "object" ? call.args : {},
+      result: call.result && typeof call.result === "object" ? call.result : {},
+      latencyMs: Number(call.latency_ms || 0),
+      pending: false,
+    });
+  });
+  return grouped;
+}
+
+function groupLiveToolsByIteration(traceEvents) {
+  const grouped = new Map();
+  const pendingByIteration = new Map();
+  traceEvents.forEach((event) => {
+    const iteration = Number(event.iteration || 0);
+    if (iteration <= 0) {
+      return;
+    }
+    if (!grouped.has(iteration)) {
+      grouped.set(iteration, []);
+      pendingByIteration.set(iteration, new Map());
+    }
+    const pendingTools = pendingByIteration.get(iteration);
+    if (event.kind === "tool_started") {
+      const tool = {
+        name: event.tool_name || "",
+        args: event.details && typeof event.details.args === "object" ? event.details.args : {},
+        result: {},
+        latencyMs: 0,
+        pending: true,
+      };
+      grouped.get(iteration).push(tool);
+      pendingTools.set(event.tool_name || `${grouped.get(iteration).length}`, tool);
+      return;
+    }
+    if (event.kind === "tool_finished") {
+      const tool = pendingTools.get(event.tool_name || "");
+      if (tool) {
+        tool.latencyMs = Number(event.latency_ms || 0);
+        tool.pending = false;
+      }
+    }
+  });
+  return grouped;
+}
+
+function formatActivityToolMeta(tool) {
+  const parts = [];
+  Object.entries(tool.args || {}).slice(0, 2).forEach(([key, value]) => {
+    parts.push(`${key}: ${summarizeActivityValue(value)}`);
+  });
+  const resultKeys = Object.keys(tool.result || {});
+  if (resultKeys.length > 0) {
+    parts.push(resultKeys.slice(0, 4).join(", "));
+  }
+  if (tool.pending) {
+    parts.push("running");
+  }
+  if (tool.latencyMs > 0) {
+    parts.push(`${tool.latencyMs} ms`);
+  }
+  return parts.join(" · ");
+}
+
+function summarizeActivityValue(value) {
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "[]" : `${value.length} item${value.length === 1 ? "" : "s"}`;
+  }
+  if (value && typeof value === "object") {
+    return "object";
+  }
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "empty";
+  }
+  return text.length > 72 ? `${text.slice(0, 69)}...` : text;
+}
+
+function inferStopReason(metadata) {
+  if (metadata.fast_path) {
+    return metadata.fast_path;
+  }
+  const iterations = Number(metadata.iterations || 0);
+  const toolCalls = Array.isArray(metadata.tool_calls) ? metadata.tool_calls : [];
+  if (iterations > 0 && toolCalls.length < iterations) {
+    return "final_answer";
+  }
+  return "complete";
+}
+
+function normalizeStopReason(reason) {
+  return String(reason || "complete").trim().toLowerCase().replaceAll(" ", "_");
 }
 
 function selectUsageSnapshot(telemetry) {
@@ -922,7 +1158,11 @@ function renderFastPathLabel(fastPath) {
 }
 
 function renderProviderControls() {
-  dom.providerSelect.innerHTML = '<option value="">Routing default</option>';
+  dom.providerSelect.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = defaultProviderOptionLabel();
+  dom.providerSelect.appendChild(defaultOption);
   state.providers.forEach((provider) => {
     const option = document.createElement("option");
     option.value = provider.id;
@@ -1156,6 +1396,10 @@ async function sendMessage() {
   if (!question || state.isSending) {
     return;
   }
+  if (question.startsWith("/")) {
+    await executeCommand(question);
+    return;
+  }
   state.isSending = true;
   state.lastQuestion = question;
   state.abortController = new AbortController();
@@ -1252,6 +1496,71 @@ async function sendMessage() {
   }
 }
 
+async function executeCommand(commandText) {
+  state.isSending = true;
+  state.lastQuestion = commandText;
+  hideCommandMenu();
+  updateComposerState();
+  updateTraceNote();
+  setStatus("Running command");
+
+  if (!state.sessionId) {
+    await createSession(false);
+  }
+
+  const userMessage = {
+    role: "user",
+    content: commandText,
+    metadata: {},
+    created_at: new Date().toISOString(),
+  };
+  const assistantMessage = {
+    role: "assistant",
+    content: "Running command...",
+    metadata: {
+      pending: true,
+      kind: "slash_command",
+    },
+    created_at: new Date().toISOString(),
+  };
+
+  state.messages.push(userMessage, assistantMessage);
+  renderMessages();
+  dom.questionInput.value = "";
+  try {
+    const response = await api("/api/chat/commands/execute", {
+      method: "POST",
+      body: JSON.stringify({
+        command: commandText,
+        session_id: state.sessionId,
+      }),
+    });
+    assistantMessage.content = response.answer || "";
+    assistantMessage.metadata = {
+      ...(response.metadata || {}),
+      pending: false,
+    };
+    renderMessages();
+    setStatus("Command complete");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assistantMessage.content = `Error: ${message}`;
+    assistantMessage.metadata = {
+      ...assistantMessage.metadata,
+      error: message,
+      pending: false,
+    };
+    renderMessages();
+    throw error;
+  } finally {
+    state.isSending = false;
+    updateComposerState();
+    updateTraceNote();
+    await refreshSessions();
+    dom.questionInput.focus();
+  }
+}
+
 async function refreshSessions() {
   const payload = await api("/api/sessions");
   state.sessions = payload.sessions || [];
@@ -1322,9 +1631,7 @@ async function copyCurrentTranscript() {
   if (!state.messages.length) {
     return;
   }
-  const transcript = state.messages
-    .map((message) => `${message.role === "assistant" ? "Assistant" : "You"}:\n${message.content || ""}`)
-    .join("\n\n");
+  const transcript = serializeConversationToMarkdown();
   await navigator.clipboard.writeText(transcript);
   setStatus("Transcript copied");
 }
@@ -1401,7 +1708,7 @@ async function handleMessageAction(action, index) {
     return;
   }
   if (action === "copy") {
-    await navigator.clipboard.writeText(message.content || "");
+    await navigator.clipboard.writeText(serializeMessageToMarkdown(message, index, { includeHeading: true }));
     setStatus("Message copied");
   }
 }
@@ -1417,12 +1724,12 @@ function updateTraceNote() {
 function updateChatControlSummaries() {
   const selectedProvider = state.providers.find((provider) => provider.id === state.selectedProviderId);
   if (selectedProvider) {
-    dom.chatProviderSummary.textContent = `Provider: ${selectedProvider.display_name || selectedProvider.id} (${selectedProvider.model_id || "model not set"})`;
+    dom.chatProviderSummary.textContent = `Chat model: ${providerSummaryLabel(selectedProvider)}`;
   } else {
-    const intentProvider = providerNameFromId(state.modelRouting.intent?.primary_provider_id);
-    const synthesisProvider = providerNameFromId(state.modelRouting.synthesis?.primary_provider_id);
+    const intentProvider = providerSummaryLabel(providerFromId(state.modelRouting.intent?.primary_provider_id));
+    const synthesisProvider = providerSummaryLabel(providerFromId(state.modelRouting.synthesis?.primary_provider_id));
     dom.chatProviderSummary.textContent =
-      `Provider: ${intentProvider}. Synthesis: ${synthesisProvider}.`;
+      `Chat model: ${synthesisProvider}. Intent routing: ${intentProvider}.`;
   }
 
   dom.chatGatingSummary.textContent =
@@ -1620,6 +1927,7 @@ function buildUIStateSnapshot() {
     archivedSessionIds: Array.from(state.archivedSessionIds),
     sidebarWidth: clampSidebarWidth(state.sidebarWidth),
     workspaceHeight: clampWorkspaceHeight(state.workspaceHeight),
+    totalWorkspaceHeight: clampTotalWorkspaceHeight(state.totalWorkspaceHeight),
     providerSort: {
       key: state.providerSort.key || "display_name",
       direction: state.providerSort.direction === "desc" ? "desc" : "asc",
@@ -1734,6 +2042,11 @@ function initializeWorkspaceResizers() {
     applyWorkspaceLayout();
     queuePersistUIState();
   });
+  attachPointerResizer(dom.workspaceBottomResizer, "y", (delta) => {
+    state.totalWorkspaceHeight = clampTotalWorkspaceHeight(state.totalWorkspaceHeight + delta);
+    applyWorkspaceLayout();
+    queuePersistUIState();
+  });
 }
 
 function attachPointerResizer(handle, axis, onDelta) {
@@ -1761,8 +2074,9 @@ function attachPointerResizer(handle, axis, onDelta) {
 }
 
 function applyWorkspaceLayout() {
-  document.documentElement.style.setProperty("--sessions-pane-width", `${clampSidebarWidth(state.sidebarWidth)}px`);
-  document.documentElement.style.setProperty("--composer-height", `${clampWorkspaceHeight(state.workspaceHeight)}px`);
+  dom.chatWorkspace.style.setProperty("--sessions-pane-width", `${clampSidebarWidth(state.sidebarWidth)}px`);
+  dom.chatWorkspace.style.setProperty("--composer-height", `${clampWorkspaceHeight(state.workspaceHeight)}px`);
+  dom.chatWorkspace.style.setProperty("--chat-workspace-height", `${clampTotalWorkspaceHeight(state.totalWorkspaceHeight)}px`);
 }
 
 function clampSidebarWidth(width) {
@@ -1773,6 +2087,11 @@ function clampSidebarWidth(width) {
 function clampWorkspaceHeight(height) {
   const value = Number(height || 0);
   return Math.max(100, Math.min(560, Number.isFinite(value) ? value : 168));
+}
+
+function clampTotalWorkspaceHeight(height) {
+  const value = Number(height || 0);
+  return Math.max(300, Math.min(1600, Number.isFinite(value) ? value : 600));
 }
 
 function getActiveViewName() {
@@ -1948,8 +2267,142 @@ function findLastUserQuestion() {
 }
 
 function buildAssistantLabel(message) {
+  const commandName = String(message.metadata?.command?.name || message.metadata?.command_name || "").trim();
+  if (commandName) {
+    return `Command · /${commandName}`;
+  }
   const provider = message.metadata?.provider_id || "";
   return provider ? `Assistant · ${provider}` : "Assistant";
+}
+
+function handleCommandMenuKeydown(event) {
+  if (!isCommandMenuOpen()) {
+    return false;
+  }
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveCommandSelection(1);
+    return true;
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveCommandSelection(-1);
+    return true;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    hideCommandMenu();
+    return true;
+  }
+  if (event.key === "Tab") {
+    event.preventDefault();
+    applyActiveCommandSuggestion();
+    return true;
+  }
+  if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey) {
+    const exact = resolveExactCommandMatch(dom.questionInput.value);
+    if (!exact) {
+      event.preventDefault();
+      applyActiveCommandSuggestion();
+      return true;
+    }
+  }
+  return false;
+}
+
+function syncCommandMenu() {
+  const suggestions = getCommandSuggestions(dom.questionInput.value);
+  if (!suggestions.length) {
+    hideCommandMenu();
+    return;
+  }
+  const previous = state.commandMenu.items[state.commandMenu.activeIndex]?.name || "";
+  state.commandMenu.items = suggestions;
+  const nextIndex = suggestions.findIndex((item) => item.name === previous);
+  state.commandMenu.activeIndex = nextIndex >= 0 ? nextIndex : 0;
+  renderCommandMenu();
+}
+
+function getCommandSuggestions(value) {
+  const trimmed = String(value || "").trimStart();
+  if (!trimmed.startsWith("/")) {
+    return [];
+  }
+  const token = trimmed.slice(1).split(/\s/, 1)[0].toLowerCase();
+  const hasWhitespaceAfterToken = /\S+\s+/.test(trimmed.slice(1));
+  if (hasWhitespaceAfterToken) {
+    return [];
+  }
+  return state.commands
+    .filter((command) => !token || command.name.startsWith(token))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function resolveExactCommandMatch(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
+  const token = trimmed.slice(1).split(/\s/, 1)[0].toLowerCase();
+  if (!token) {
+    return null;
+  }
+  return state.commands.find((command) => command.name === token) || null;
+}
+
+function isCommandMenuOpen() {
+  return !dom.commandMenu.hidden && state.commandMenu.items.length > 0;
+}
+
+function moveCommandSelection(delta) {
+  const size = state.commandMenu.items.length;
+  if (!size) {
+    return;
+  }
+  state.commandMenu.activeIndex = (state.commandMenu.activeIndex + delta + size) % size;
+  renderCommandMenu();
+}
+
+function applyActiveCommandSuggestion() {
+  const active = state.commandMenu.items[state.commandMenu.activeIndex];
+  if (!active) {
+    return;
+  }
+  dom.questionInput.value = `/${active.name} `;
+  hideCommandMenu();
+  dom.questionInput.focus();
+}
+
+function hideCommandMenu() {
+  state.commandMenu.items = [];
+  state.commandMenu.activeIndex = 0;
+  dom.commandMenu.hidden = true;
+  dom.commandMenu.innerHTML = "";
+}
+
+function renderCommandMenu() {
+  const items = state.commandMenu.items;
+  if (!items.length) {
+    hideCommandMenu();
+    return;
+  }
+  dom.commandMenu.hidden = false;
+  dom.commandMenu.innerHTML = "";
+  items.forEach((command, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `command-option${index === state.commandMenu.activeIndex ? " is-active" : ""}`;
+    button.innerHTML = `
+      <span class="command-option-name">/${escapeHtml(command.name)}</span>
+      <span class="command-option-description">${escapeHtml(command.description || "")}</span>
+    `;
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      state.commandMenu.activeIndex = index;
+      applyActiveCommandSuggestion();
+    });
+    dom.commandMenu.appendChild(button);
+  });
 }
 
 function isAssistantMessagePending(message) {
@@ -1980,6 +2433,28 @@ function providerNameFromId(providerId) {
   }
   const provider = state.providers.find((item) => item.id === providerId);
   return provider ? provider.display_name || provider.id : providerId;
+}
+
+function providerFromId(providerId) {
+  if (!providerId) {
+    return null;
+  }
+  return state.providers.find((item) => item.id === providerId) || null;
+}
+
+function providerSummaryLabel(provider) {
+  if (!provider) {
+    return "Auto";
+  }
+  const providerName = provider.display_name || provider.id || "Provider";
+  return provider.model_id ? `${providerName} (${provider.model_id})` : providerName;
+}
+
+function defaultProviderOptionLabel() {
+  const synthesisProvider = providerFromId(state.modelRouting.synthesis?.primary_provider_id);
+  return synthesisProvider
+    ? `Auto: ${providerSummaryLabel(synthesisProvider)}`
+    : "Auto";
 }
 
 async function api(path, options = {}) {
@@ -2459,13 +2934,329 @@ function formatCompactNumber(value) {
     return "0";
   }
   if (number >= 1000) {
-    return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}k`;
+    return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}K`;
   }
   return String(number);
 }
 
-function formatMultiline(value) {
-  return escapeHtml(value).replace(/\n/g, "<br>");
+function formatTokenThroughput(outputTokens, elapsedMs) {
+  const ms = Number(elapsedMs || 0);
+  const tokens = Number(outputTokens || 0);
+  if (ms <= 0 || tokens <= 0) {
+    return "";
+  }
+  const rate = tokens / (ms / 1000);
+  return rate >= 10 ? String(Math.round(rate)) : rate.toFixed(1);
+}
+
+function renderMarkdown(value) {
+  const source = String(value || "").replace(/\r\n?/g, "\n");
+  if (!source.trim()) {
+    return "";
+  }
+
+  const fences = [];
+  const text = source.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, info, code) => {
+    const token = `@@CODEBLOCK${fences.length}@@`;
+    fences.push({
+      info: String(info || "").trim(),
+      code: String(code || "").replace(/\n$/, ""),
+    });
+    return token;
+  });
+
+  return text
+    .split(/\n{2,}/)
+    .map((block) => renderMarkdownBlock(block.trim(), fences))
+    .filter(Boolean)
+    .join("");
+}
+
+function renderMarkdownBlock(block, fences) {
+  if (!block) {
+    return "";
+  }
+  const codeMatch = block.match(/^@@CODEBLOCK(\d+)@@$/);
+  if (codeMatch) {
+    const fence = fences[Number(codeMatch[1])] || { info: "", code: "" };
+    const infoAttr = fence.info ? ` data-language="${escapeAttr(fence.info)}"` : "";
+    const label = fence.info ? `<div class="message-code-label">${escapeHtml(fence.info)}</div>` : "";
+    return `<div class="message-code-frame"${infoAttr}>${label}<pre class="message-code-block"><code>${escapeHtml(fence.code)}</code></pre></div>`;
+  }
+
+  const lines = block.split("\n");
+  const heading = block.match(/^(#{1,6})[ \t]+(.+)$/);
+  if (heading) {
+    const level = Math.min(heading[1].length, 6);
+    return `<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`;
+  }
+
+  if (lines.every((line) => /^\s*>/.test(line))) {
+    const quoted = lines.map((line) => line.replace(/^\s*> ?/, "")).join("\n");
+    return `<blockquote>${renderMarkdown(quoted)}</blockquote>`;
+  }
+
+  if (lines.every((line) => /^\s*[-*+]\s+/.test(line))) {
+    return `<ul>${lines.map((line) => `<li>${renderInlineMarkdown(line.replace(/^\s*[-*+]\s+/, ""))}</li>`).join("")}</ul>`;
+  }
+
+  if (lines.every((line) => /^\s*\d+\.\s+/.test(line))) {
+    return `<ol>${lines.map((line) => `<li>${renderInlineMarkdown(line.replace(/^\s*\d+\.\s+/, ""))}</li>`).join("")}</ol>`;
+  }
+
+  return `<p>${lines.map((line) => renderInlineMarkdown(line)).join("<br>")}</p>`;
+}
+
+function renderInlineMarkdown(value) {
+  const inlineCodes = [];
+  const placeholderSource = String(value || "").replace(/`([^`\n]+)`/g, (_, code) => {
+    const token = `@@INLINECODE${inlineCodes.length}@@`;
+    inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
+    return token;
+  });
+
+  let html = escapeHtml(placeholderSource);
+  html = html.replace(/@@INLINECODE(\d+)@@/g, (_, index) => inlineCodes[Number(index)] || "");
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label, url) => {
+    const safeUrl = sanitizeHref(url);
+    if (!safeUrl) {
+      return `${label} (${url})`;
+    }
+    return `<a href="${escapeAttr(safeUrl)}" target="_blank" rel="noreferrer">${label}</a>`;
+  });
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+  return html;
+}
+
+function sanitizeHref(url) {
+  const text = String(url || "").trim();
+  if (!text) {
+    return "";
+  }
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString();
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function serializeConversationToMarkdown() {
+  const session = state.sessions.find((item) => item.id === state.sessionId);
+  const title = session?.title || dom.chatTitle?.textContent?.trim() || "New chat";
+  const anchorMessage = state.messages.find((message) => message.created_at) || state.messages[0];
+  const headingStamp = formatCopyHeadingDate(anchorMessage?.metadata?.telemetry?.finished_at || anchorMessage?.created_at);
+  const lines = [`# Chat: ${title}${headingStamp ? ` — ${headingStamp}` : ""}`];
+
+  state.messages.forEach((message, index) => {
+    lines.push("", serializeMessageToMarkdown(message, index, { includeHeading: false }));
+  });
+
+  return lines.join("\n").trim();
+}
+
+function serializeMessageToMarkdown(message, index, options = {}) {
+  const includeHeading = Boolean(options.includeHeading);
+  const lines = [];
+  if (includeHeading) {
+    const session = state.sessions.find((item) => item.id === state.sessionId);
+    const title = session?.title || dom.chatTitle?.textContent?.trim() || "New chat";
+    lines.push(`# Message: ${title}`);
+    lines.push("");
+  }
+
+  lines.push(buildMessageCopyHeader(message));
+  lines.push("");
+  lines.push(message.content || "");
+
+  if (message.role === "assistant") {
+    const metadata = message.metadata || {};
+    if (state.ui.verbose_trace && shouldRenderAgentActivity(metadata) && isAgentActivityOpen(message, index)) {
+      lines.push("", serializeAgentActivityToMarkdown(metadata));
+    }
+    const stats = serializeAssistantStatsToMarkdown(message);
+    if (stats) {
+      lines.push("", stats);
+    }
+  }
+
+  return lines.join("\n").trim();
+}
+
+function buildMessageCopyHeader(message) {
+  const timestamp = formatCopyClock(message.metadata?.telemetry?.finished_at || message.created_at);
+  if (message.role !== "assistant") {
+    return `## User${timestamp ? ` · ${timestamp}` : ""}`;
+  }
+  const identity = buildAssistantCopyIdentity(message);
+  return `## Assistant${identity ? ` (${identity})` : ""}${timestamp ? ` · ${timestamp}` : ""}`;
+}
+
+function buildAssistantCopyIdentity(message) {
+  const metadata = message.metadata || {};
+  const telemetry = metadata.telemetry || {};
+  const parts = [];
+  if (metadata.provider_id) {
+    parts.push(metadata.provider_id);
+  }
+  if (telemetry.intent_model) {
+    parts.push(telemetry.intent_model);
+  }
+  if (telemetry.synthesis_model && telemetry.synthesis_model !== telemetry.intent_model) {
+    parts.push(telemetry.synthesis_model);
+  }
+  if (shouldRenderAgentActivity(metadata)) {
+    parts.push("Agent");
+  }
+  return parts.join(" · ");
+}
+
+function serializeAgentActivityToMarkdown(metadata) {
+  const activity = buildAgentActivityModel(metadata);
+  const lines = ["### Agent activity", "", "**Agent run**"];
+  const context = buildAgentActivityContext(metadata);
+  if (context.length) {
+    lines.push("", "#### Context used", "");
+    context.forEach((item) => {
+      lines.push(`- ${item}`);
+    });
+  }
+
+  activity.iterations.forEach((iteration) => {
+    lines.push("", `#### Iteration ${iteration.number}`, "");
+    if (!iteration.tools.length) {
+      lines.push("- no tools");
+      return;
+    }
+    iteration.tools.forEach((tool) => {
+      lines.push(`- \`${tool.name || "tool"}\`${formatActivityToolMarkdown(tool)}`);
+    });
+  });
+
+  lines.push("", `**Done · ${activity.stopReason}**`);
+  return lines.join("\n");
+}
+
+function buildAgentActivityContext(metadata) {
+  const items = [];
+  if (metadata.gating_mode) {
+    items.push(`\`gating_mode\` — ${metadata.gating_mode}`);
+  }
+  if (Array.isArray(metadata.bound_tools) && metadata.bound_tools.length) {
+    items.push(`\`bound_tools\` — ${metadata.bound_tools.map((tool) => `\`${tool}\``).join(", ")}`);
+  }
+  if (metadata.intent?.summary) {
+    items.push(`\`intent\` — ${metadata.intent.summary}`);
+  }
+  if (metadata.intent?.time_range) {
+    items.push(`\`time_range\` — ${metadata.intent.time_range}`);
+  }
+  return items;
+}
+
+function formatActivityToolMarkdown(tool) {
+  const parts = [];
+  Object.entries(tool.args || {}).forEach(([key, value]) => {
+    parts.push(`${key}: ${summarizeActivityValue(value)}`);
+  });
+  const resultKeys = Object.keys(tool.result || {});
+  if (resultKeys.length > 0) {
+    parts.push(resultKeys.join(", "));
+  }
+  if (tool.pending) {
+    parts.push("running");
+  }
+  if (tool.latencyMs > 0) {
+    parts.push(`${tool.latencyMs} ms`);
+  }
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
+function serializeAssistantStatsToMarkdown(message) {
+  const metadata = message.metadata || {};
+  const telemetry = metadata.telemetry || {};
+  const usage = selectUsageSnapshot(telemetry);
+  const elapsedMs = selectElapsedMs(metadata, telemetry);
+  const parts = [];
+  if (telemetry.intent_model) {
+    parts.push(telemetry.intent_model);
+  } else if (metadata.provider_id) {
+    parts.push(metadata.provider_id);
+  }
+  if (telemetry.synthesis_model) {
+    parts.push(telemetry.synthesis_model);
+  }
+  if (elapsedMs > 0) {
+    parts.push(`${elapsedMs} ms`);
+  }
+  if (usage.input_tokens > 0 || usage.output_tokens > 0 || usage.total_tokens > 0) {
+    parts.push(`↑${formatCompactNumber(usage.input_tokens)}`);
+    parts.push(`↓${formatCompactNumber(usage.output_tokens)} tok`);
+    const throughput = formatTokenThroughput(usage.output_tokens, elapsedMs);
+    if (throughput) {
+      parts.push(`${throughput} tok/s`);
+    }
+  }
+  if (Number(metadata.iterations || 0) > 0) {
+    parts.push(`${Number(metadata.iterations)} iter`);
+  }
+  if (!parts.length) {
+    return "";
+  }
+  return `_${parts.join(" · ")}_`;
+}
+
+function isAgentActivityOpen(message, index) {
+  const key = buildMessageTraceKey(message, index);
+  if (Object.prototype.hasOwnProperty.call(state.messageTraceOpen, key)) {
+    return Boolean(state.messageTraceOpen[key]);
+  }
+  return true;
+}
+
+function setAgentActivityOpen(message, index, isOpen) {
+  state.messageTraceOpen[buildMessageTraceKey(message, index)] = Boolean(isOpen);
+}
+
+function buildMessageTraceKey(message, index) {
+  return `${message.role}:${message.created_at || "na"}:${index}`;
+}
+
+function formatCopyClock(value) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatCopyHeadingDate(value) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function escapeHtml(value) {

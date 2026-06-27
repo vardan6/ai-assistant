@@ -120,7 +120,39 @@ to keep early-iteration context small.
   architecture.
 - Config I/O tab: import/export the **JSON config file only**. Secrets stay outside exported config
   and continue to live in env vars or the SQLite `SecretStore`.
+- Dataset tab: expose the active dataset config/status through dedicated API endpoints backed by
+  the same shared JSON config file. The tab owns `csv_dir`, optional per-table overrides, active
+  dataset summary, resolved file paths, reload/reset actions, and dataset validation feedback.
+- Dataset uploads: support per-table CSV upload and bulk `.zip` import. Uploads copy files into
+  managed server-side storage under canonical table names, then update the same dataset config
+  paths used by manual path editing.
 - CLI: thin client mirroring the same footer.
+
+## Dataset settings and reload model
+
+Keep the loader contract simple: resolve one final file path per canonical table before
+constructing `PandasDataSource`. Centralize that resolution in backend config/helpers rather than
+teaching the loader or frontend about multiple path rules.
+
+Runtime behavior:
+
+- Dedicated dataset endpoints may provide richer validation/reload behavior than generic Config I/O,
+  but both persist into the same JSON config file.
+- `Save Paths` validates all 7 resolved CSVs, then rebuilds the live `Pipeline` in-process on
+  success; failure leaves both runtime and persisted config unchanged.
+- `Reload Current Dataset` revalidates/rebuilds from the currently persisted dataset config only.
+- `Reset to Defaults` restores the built-in repo dataset config, validates it, then reloads.
+- Live dataset swaps affect new requests only; in-flight requests finish on the pipeline instance
+  they started with.
+
+Managed storage behavior:
+
+- Per-table uploads stage the file, validate the full resolved dataset with that candidate, then
+  replace the managed file and persist that table's override path on success.
+- Bulk `.zip` import is atomic: extract to staging, require all 7 canonical CSVs exactly once
+  (case-insensitive basename match; ignore extras), then activate by swapping to a managed dataset
+  directory, updating `csv_dir`, and clearing per-table overrides.
+- Managed upload/import paths should be stored as project-relative config paths when practical.
 
 ## Graceful degradation
 

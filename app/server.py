@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from .ai import SecretStore, TraceEvent
 from .ai.provider_registry import evict_model_cache
 from .ai.session_store import SessionStore
+from .chat_commands import CommandContext, build_command_registry
 from .config import AppConfig, load_config
 from .pipeline import Pipeline, PipelineAnswer
 from .provider_config import (
@@ -69,6 +70,11 @@ class ConfigImportRequest(BaseModel):
     config: dict[str, Any]
 
 
+class CommandExecuteRequest(BaseModel):
+    command: str
+    session_id: str = ""
+
+
 def create_app(
     config: AppConfig | None = None,
     *,
@@ -82,6 +88,7 @@ def create_app(
     secrets = secret_store or SecretStore(cfg.llm_secrets_db_path)
     sessions = session_store or SessionStore(cfg.ai_sessions_db_path)
     live_pipeline = pipeline or Pipeline(cfg, secret_resolver=secrets.get)
+    command_registry = build_command_registry()
 
     def serialize_answer(result: PipelineAnswer) -> dict[str, Any]:
         return {
@@ -94,6 +101,7 @@ def create_app(
             "bound_tools": result.bound_tools,
             "fast_path": result.fast_path,
             "iterations": result.iterations,
+            "stop_reason": result.stop_reason,
             "provider_id": result.provider_id,
             "telemetry": result.telemetry.as_dict(),
         }
@@ -179,6 +187,33 @@ def create_app(
     @app.get("/api/settings/config")
     def get_config_payload() -> dict[str, Any]:
         return {"config": export_config_payload(cfg)}
+
+    @app.get("/api/chat/commands")
+    def list_chat_commands() -> dict[str, Any]:
+        return {"commands": [spec.as_dict() for spec in command_registry.specs()]}
+
+    @app.post("/api/chat/commands/execute")
+    def execute_chat_command(request: CommandExecuteRequest) -> dict[str, Any]:
+        try:
+            spec, result = command_registry.execute(
+                request.command,
+                CommandContext(tool_registry=live_pipeline.tool_registry),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown command '/{exc.args[0]}'.") from exc
+        payload = {
+            "answer": result.content,
+            "command": spec.as_dict(),
+            "metadata": {
+                **result.metadata,
+                "command": spec.as_dict(),
+            },
+        }
+        if request.session_id:
+            _append_turn_or_404(sessions, request.session_id, request.command, payload["answer"], payload["metadata"])
+        return payload
 
     @app.put("/api/settings/config")
     def put_config_payload(request: ConfigImportRequest) -> dict[str, Any]:
@@ -303,14 +338,15 @@ def _append_turn_or_404(
     sessions: SessionStore,
     session_id: str,
     question: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | str,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     try:
         sessions.append_turn(
             session_id,
             question=question,
-            answer=str(payload.get("answer", "")),
-            metadata=payload,
+            answer=str(payload.get("answer", "")) if isinstance(payload, dict) else str(payload),
+            metadata=payload if isinstance(payload, dict) else (metadata or {}),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -50,6 +50,27 @@ choices must stay clean and unsurprising in a walkthrough.
 - Agent operates in a single mode (**agent mode only**; no separate chat mode).
 - Greetings/smalltalk short-circuit before the LLM/tools (fast-path).
 
+## Dataset configuration behavior
+
+- The app exposes dataset selection in Settings through the same shared JSON config used by
+  Config I/O.
+- Dataset configuration uses a base directory (`data.csv_dir`) plus optional per-table file
+  overrides (`data.csv_files`) for the 7 canonical CSVs. A blank override means
+  `<csv_dir>/<canonical_name>.csv`.
+- The Settings UI must show backend/server paths, not browser-local paths, and must show the
+  effective resolved path for each canonical table.
+- Dataset changes apply only on explicit actions (`Save Paths`, `Reload Current Dataset`,
+  `Reset to Defaults`, per-table upload, bulk zip import), never on field edit.
+- Saving or upload/import activation must validate the full resolved 7-file dataset before the
+  runtime switches over. On failure, the current active dataset remains in use and the persisted
+  config remains unchanged.
+- The app manages exactly one active dataset configuration at a time.
+- Uploads are optional convenience flows layered onto the same config model:
+  per-table CSV upload and bulk `.zip` import. Uploaded files become managed backend files whose
+  stored paths are written back into dataset config.
+- Config export/import includes dataset settings as paths/config only; it does not embed dataset
+  file contents.
+
 ## Non-goals
 
 - No RAG / retrieval / embeddings (confirmed out of scope for this task).

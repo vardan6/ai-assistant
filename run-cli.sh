@@ -81,4 +81,4 @@ else
   fi
 fi
 
-exec "$PYTHON_BIN" -m app.cli
+exec "$PYTHON_BIN" -m app.cli "$@"
