@@ -129,6 +129,7 @@ def normalize_ui_settings(ui: dict[str, Any]) -> dict[str, Any]:
     return {
         "default_gating_mode": default_gating_mode,
         "verbose_trace": bool(ui.get("verbose_trace", True)),
+        "use_reference_now_anchor": bool(ui.get("use_reference_now_anchor", True)),
     }
 
 

@@ -3,9 +3,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.ai import AgentResult, UsageSnapshot, run_agent_loop
+from app.ai.intent_schema import coerce_intent
 from app.config import load_config
 from app.data import PandasDataSource
-from app.pipeline import Pipeline, select_tool_names
+from app.pipeline import Pipeline, _build_synthesis_prompt, select_tool_names
+from app.schema_card import build_schema_card
 from app.tools import ToolContext, build_registry
 
 
@@ -43,15 +45,84 @@ def test_gated_tool_selection_uses_generous_subset_and_resolvers(registry):
         "alerts", "inverters", "maintenance", "plants"
     ]
     assert select_tool_names({"types": ["B"]}, gating_mode="gated", available_tools=available) == [
-        "daily_yield", "performance_ratio", "mttr", "generation_readings", "inverters", "plants", "weather_readings"
+        "alerts",
+        "anomalies",
+        "daily_yield",
+        "performance_ratio",
+        "mttr",
+        "total_yield",
+        "generation_readings",
+        "inverters",
+        "plants",
+        "weather_readings",
     ]
     assert select_tool_names({"types": ["C"]}, gating_mode="gated", available_tools=available) == [
         "anomalies", "inverters", "plants"
     ]
+    assert select_tool_names(
+        {"types": ["B"], "metric": "tariff_usd_per_kwh", "summary": "Highest feed-in tariff"},
+        gating_mode="gated",
+        available_tools=available,
+    ) == ["inverters", "plants"]
+    assert select_tool_names(
+        {"types": ["B"], "metric": "performance_ratio", "summary": "Which plant is performing worst right now?"},
+        gating_mode="gated",
+        available_tools=available,
+    ) == ["performance_ratio", "inverters", "plants"]
     assert select_tool_names({"types": []}, gating_mode="gated", available_tools=available) == [
         "inverters", "plants"
     ]
     assert select_tool_names({"types": ["C"]}, gating_mode="bind_all", available_tools=available) == available
+
+
+def test_synthesis_prompt_includes_generated_schema_card():
+    prompt = _build_synthesis_prompt(
+        "2026-06-22T10:00:00",
+        "2026-06-22T10:00:00",
+        use_reference_now_anchor=True,
+        schema_card=build_schema_card(),
+        intent={"types": ["B"], "metric": "tariff_usd_per_kwh"},
+    )
+
+    assert 'timestamp: 2026-06-22T10:00:00. This is NOT the real-world date.' in prompt
+    assert "Schema card (generated from docs/dataset-analysis.md" in prompt
+    assert "## Join cardinality (fan-out)" in prompt
+    assert "## Entity resolver index" in prompt
+    assert "## Vocabulary coverage map" in prompt
+    assert "## Measure semantics (aggregation rules)" in prompt
+    assert "feed-in tariff questions" in prompt
+
+
+def test_synthesis_prompt_can_switch_relative_time_to_wall_clock():
+    prompt = _build_synthesis_prompt(
+        "2026-06-22T10:00:00",
+        "2026-06-30T12:00:00",
+        use_reference_now_anchor=False,
+        schema_card=build_schema_card(),
+        intent={"types": ["B"], "metric": "performance_ratio"},
+    )
+
+    assert 'real-world wall clock time: 2026-06-30T12:00:00' in prompt
+    assert "Do NOT anchor them to the dataset's latest timestamp (2026-06-22T10:00:00)." in prompt
+    assert 'window="last_week"' in prompt
+
+
+def test_intent_coercion_recovers_metric_from_question_phrases():
+    intent = coerce_intent(
+        {
+            "types": ["B"],
+            "entities": {},
+            "time_range": None,
+            "metric": "",
+            "out_of_scope": False,
+            "confidence": 0.7,
+            "summary": "",
+        },
+        question="Which plant has the highest feed-in tariff?",
+    )
+
+    assert intent["metric"] == "tariff_usd_per_kwh"
+    assert intent["types"] == ["B"]
 
 
 def test_loop_supports_resolver_then_anomalies_chain(registry, ctx):

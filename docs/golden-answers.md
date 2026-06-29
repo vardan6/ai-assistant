@@ -1,88 +1,427 @@
-# Golden answers (demo questions)
+# Golden answers
 
-_Computed directly from the CSVs by `scripts/golden_answers.py` on 2026-06-29 23:21. Independent of the app tools — use as the correctness oracle. Re-run after any data change._
+_Computed directly from the CSVs by `scripts/golden_answers.py` on 2026-06-30 02:02. Independent of the app tools — use as the correctness oracle. Re-run after any data change._
 
 **reference_now:** `2026-06-22 10:00:00`
 
 
-## Q1 offline plant + open alert
+## Demo questions
+
+
+### Q1 offline plant + open alert
 
 ```json
 {
   "offline_plants": [
     {
-      "plant": "Tamil Nadu PV Plant",
       "open_alerts": [
         {
-          "alert_id": "1",
+          "alert_id": 1,
+          "description": "Plant disconnected from grid",
           "severity": "critical",
-          "type": "grid_disconnection",
-          "description": "Plant disconnected from grid"
+          "type": "grid_disconnection"
         }
-      ]
+      ],
+      "plant": "Tamil Nadu PV Plant"
     }
   ]
 }
 ```
 
-## Q2 avg daily yield Rajasthan last week
+### Q2 avg daily yield Rajasthan last week
 
 ```json
 {
-  "plant": "Rajasthan Solar Park",
-  "window": "2026-06-16..2026-06-22",
+  "avg_plant_daily_yield_kwh": 123354.2,
   "days_covered": 7,
-  "avg_plant_daily_yield_kwh": 123354.2
+  "plant": "Rajasthan Solar Park",
+  "window": "2026-06-16..2026-06-22"
 }
 ```
 
-## Q3 open hotspot anomalies caused by soiling
+### Q3 open hotspot anomalies caused by soiling
 
 ```json
 {
-  "filter": "status=open AND anomaly_type=hotspot (exact) AND cause=soiling",
-  "count": 2,
   "anomaly_ids": [
-    "7",
-    "55"
+    7,
+    55
   ],
+  "count": 2,
+  "filter": "status=open AND anomaly_type=hotspot (exact) AND cause=soiling",
   "note": "empty result is the correct answer if the intersection has no rows"
 }
 ```
 
-## Q4 mean time to resolve critical alert
+### Q4 mean time to resolve critical alert
 
 ```json
 {
-  "severity": "critical",
+  "mean_time_to_resolve_hours": 6.3,
   "resolved_count": 6,
-  "mean_time_to_resolve_hours": 6.3
+  "severity": "critical"
 }
 ```
 
-## Q5 weather at Gujarat today
+### Q5 weather at Gujarat today
 
 ```json
 {
-  "plant": "Gujarat Solar Farm",
   "as_of": "2026-06-22 10:00:00",
+  "plant": "Gujarat Solar Farm",
   "reading": {
     "ambient_temp": 26.04,
-    "module_temp": 46.24,
-    "irradiation": 799.34,
-    "wind_speed": 5.29,
-    "humidity": 89.5,
     "cloud_cover_pct": 6.5,
-    "rainfall_mm": 0.0
+    "humidity": 89.5,
+    "irradiation": 799.34,
+    "module_temp": 46.24,
+    "rainfall_mm": 0.0,
+    "wind_speed": 5.29
   }
 }
 ```
 
-## Q6 revenue lost from Tamil Nadu downtime (unanswerable)
+### Q6 revenue lost from Tamil Nadu downtime (unanswerable)
 
 ```json
 {
   "answerable": false,
-  "reason": "Revenue lost from downtime needs per-inverter outage energy (lost kWh) \u00d7 tariff. The data has downtime_minutes only on alerts and no lost-energy column, so the kWh bridge cannot be built. Correct behaviour: refuse, do not fabricate a number."
+  "reason": "Revenue lost from downtime needs outage-energy (lost kWh) \u00d7 tariff. The data has downtime_minutes only on alerts and no lost-energy bridge, so the number cannot be derived. Correct behaviour: refuse; do not fabricate."
+}
+```
+
+## Section 3 oracle pins
+
+_These entries pin every former `[oracle⁺]` placeholder in `docs/test-plan.md` §3. Where a question is underspecified, the oracle states the reducer/metric it chose so replays stay comparable._
+
+
+### AL1 — What open critical alerts exist?
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "alert_id": 1,
+      "plant": "Tamil Nadu PV Plant",
+      "severity": "critical",
+      "type": "grid_disconnection"
+    }
+  ]
+}
+```
+
+### AL3 — Show all alerts for Rajasthan.
+
+```json
+{
+  "count": 15,
+  "plant": "Rajasthan Solar Park",
+  "status_counts": {
+    "open": 2,
+    "resolved": 13
+  }
+}
+```
+
+### AL4 — What is the total downtime caused by resolved alerts?
+
+```json
+{
+  "total_downtime_minutes": 31836.0
+}
+```
+
+### AL5 — Mean time to resolve an alert (all severities).
+
+```json
+{
+  "mean_time_to_resolve_hours": 22.16,
+  "resolved_alerts": 25
+}
+```
+
+### AN1 — Which inverters have open hotspot anomalies?
+
+```json
+{
+  "anomaly_ids": [
+    7,
+    28,
+    29,
+    38,
+    48,
+    52,
+    55
+  ],
+  "count": 7,
+  "inverter_ids": [
+    "INV_4135001_09",
+    "INV_4136001_07",
+    "INV_4136001_02",
+    "INV_4137001_04",
+    "INV_4136001_07",
+    "INV_4137001_05",
+    "INV_4136001_08"
+  ]
+}
+```
+
+### AN4 — Total estimated power loss from open anomalies.
+
+```json
+{
+  "estimated_power_loss_kw": 1421.42
+}
+```
+
+### AN6 — Summarise all unresolved anomalies for Rajasthan.
+
+```json
+{
+  "open_subset": 7,
+  "plant": "Rajasthan Solar Park",
+  "status_counts": {
+    "monitoring": 3,
+    "open": 7,
+    "scheduled_repair": 5
+  },
+  "unresolved_total": 15
+}
+```
+
+### G1 — Avg daily yield per plant over last week.
+
+```json
+{
+  "Gujarat Solar Farm": {
+    "avg_daily_yield_kwh": 68649.9,
+    "days": 7,
+    "plant_id": "4136001"
+  },
+  "Rajasthan Solar Park": {
+    "avg_daily_yield_kwh": 123354.2,
+    "days": 7,
+    "plant_id": "4135001"
+  },
+  "Tamil Nadu PV Plant": {
+    "avg_daily_yield_kwh": 151152.5,
+    "days": 4,
+    "plant_id": "4137001"
+  }
+}
+```
+
+### G2 — Total energy generated by Rajasthan this month.
+
+```json
+{
+  "plant": "Rajasthan Solar Park",
+  "total_yield_kwh": 3004224.3,
+  "window": "2026-06-01..2026-06-22"
+}
+```
+
+### G3 — Average AC power for INV_4135001_01 last 7 days.
+
+```json
+{
+  "inverter_id": "INV_4135001_01",
+  "mean_ac_power_kw": 593.1,
+  "reading_count": 155,
+  "window": "2026-06-16..2026-06-22"
+}
+```
+
+### G4 — Which inverter has the highest performance ratio?
+
+```json
+{
+  "inverter_id": "INV_4137001_04",
+  "mean_performance_ratio": 0.9519
+}
+```
+
+### G5 — What was the peak AC power across the fleet this month?
+
+```json
+{
+  "ac_power_kw": 2505.92,
+  "inverter_id": "INV_4135001_03",
+  "plant": "Rajasthan Solar Park",
+  "plant_id": "4135001",
+  "timestamp": "2026-06-18 13:00:00"
+}
+```
+
+### I5 — Show inverters that are "online" in status but have an open alert.
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "alert_id": 4,
+      "inverter_id": "INV_4135001_05",
+      "plant_id": "4135001",
+      "severity": "minor",
+      "type": "underperformance"
+    }
+  ]
+}
+```
+
+### M3 — Total maintenance cost on done tickets.
+
+```json
+{
+  "total_cost_usd": 41715.0
+}
+```
+
+### M4 — Average duration of completed maintenance.
+
+```json
+{
+  "completed_tickets": 12,
+  "mean_duration_hours": 4.93
+}
+```
+
+### M5 — Which inverters at Gujarat have maintenance in progress?
+
+```json
+{
+  "count": 3,
+  "plant": "Gujarat Solar Farm",
+  "tickets": [
+    {
+      "inverter_id": "INV_4136001_06",
+      "ticket_id": 2
+    },
+    {
+      "inverter_id": "INV_4136001_07",
+      "ticket_id": 3
+    },
+    {
+      "inverter_id": "INV_4136001_08",
+      "ticket_id": 4
+    }
+  ]
+}
+```
+
+### P4 — Which plant has the highest feed-in tariff?
+
+```json
+{
+  "plant": "Rajasthan Solar Park",
+  "tariff_usd_per_kwh": 0.052
+}
+```
+
+### W2 — Average irradiation at Rajasthan last week.
+
+```json
+{
+  "mean_irradiation": 253.6,
+  "plant": "Rajasthan Solar Park"
+}
+```
+
+### W3 — Which plant had the highest cloud cover this month?
+
+```json
+{
+  "monthly_mean_cloud_cover_pct": 23.66,
+  "monthly_peak_cloud_cover_pct": 58.8,
+  "note": "The question is slightly underspecified; the oracle pins the default reducer to monthly mean cloud cover. Peak cloud cover is included for traceability.",
+  "oracle_reducer": "mean",
+  "plant": "Rajasthan Solar Park"
+}
+```
+
+### W4 — Was there any rainfall at Tamil Nadu this week?
+
+```json
+{
+  "had_rainfall": false,
+  "plant": "Tamil Nadu PV Plant",
+  "rainfall_total_mm": 0.0
+}
+```
+
+### X2 — Compare Rajasthan and Tamil Nadu on open anomalies and yield.
+
+```json
+{
+  "Rajasthan Solar Park": {
+    "avg_daily_yield_kwh": 123354.2,
+    "open_anomalies": 7
+  },
+  "Tamil Nadu PV Plant": {
+    "avg_daily_yield_kwh": 151152.5,
+    "open_anomalies": 13
+  }
+}
+```
+
+### X3 — For the inverter in fault, what alert and anomalies does it have?
+
+```json
+{
+  "alerts": [
+    {
+      "alert_id": 2,
+      "severity": "major",
+      "status": "open",
+      "type": "inverter_fault"
+    },
+    {
+      "alert_id": 16,
+      "severity": "minor",
+      "status": "resolved",
+      "type": "communication_loss"
+    },
+    {
+      "alert_id": 27,
+      "severity": "critical",
+      "status": "resolved",
+      "type": "inverter_fault"
+    }
+  ],
+  "anomalies": [
+    {
+      "anomaly_id": 4,
+      "anomaly_type": "string disconnection",
+      "cause": "physical internal",
+      "status": "scheduled_repair"
+    },
+    {
+      "anomaly_id": 17,
+      "anomaly_type": "tracker issue",
+      "cause": "physical internal",
+      "status": "scheduled_repair"
+    },
+    {
+      "anomaly_id": 54,
+      "anomaly_type": "string disconnection",
+      "cause": "physical internal",
+      "status": "resolved"
+    }
+  ],
+  "inverter_id": "INV_4135001_10"
+}
+```
+
+### X4 — Which plant is performing worst right now?
+
+```json
+{
+  "mean_performance_ratio": 0.9077,
+  "note": "The question is underspecified. The oracle pins a concrete metric so future replays compare against the same interpretation.",
+  "oracle_metric": "lowest mean performance_ratio over the last anchored week",
+  "plant": "Rajasthan Solar Park",
+  "plant_id": "4135001"
 }
 ```

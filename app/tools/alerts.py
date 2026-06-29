@@ -53,6 +53,7 @@ def alerts_lookup(
         "ok": True,
         "total_alerts": int(len(source)),
         "matched": int(len(frame)),
+        "alert_ids": [int(value) for value in frame["alert_id"].tolist()] if "alert_id" in frame.columns else [],
         "status_counts": counts(frame, "status"),
         "severity_counts": counts(frame, "severity"),
         "alerts": records(frame, _FIELDS),

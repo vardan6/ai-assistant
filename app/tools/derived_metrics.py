@@ -257,6 +257,62 @@ def mttr_metric(
     }
 
 
+def total_yield_metric(
+    context: ToolContext,
+    plant: str | None = None,
+    inverter: str | None = None,
+    window: str = "this_month",
+    aggregate_by: str = "plant",
+    limit: int | None = None,
+) -> dict[str, Any]:
+    frame = context.data.table("generation_readings")
+    frame = filter_plant(frame, context, plant)
+    frame = filter_exact(frame, "inverter_id", inverter)
+    frame = _filter_window(frame, "timestamp", window, context)
+    if frame.empty:
+        return _empty_metric("total_yield", window=window, aggregate_by=aggregate_by)
+
+    group = _normalize_group(aggregate_by, default="plant")
+    limit = clamp_limit(limit, default=5, maximum=20)
+    per_inverter = (
+        frame.sort_values("timestamp")
+        .groupby(["plant_id", "inverter_id"], dropna=False)["total_yield"]
+        .agg(first="first", last="last", reading_count="count")
+        .reset_index()
+    )
+    per_inverter["total_yield"] = per_inverter["last"] - per_inverter["first"]
+    if group == "plant":
+        results = (
+            per_inverter.groupby("plant_id", dropna=False)
+            .agg(total_yield=("total_yield", "sum"), reading_count=("reading_count", "sum"))
+            .reset_index()
+        )
+    else:
+        results = per_inverter[["plant_id", "inverter_id", "total_yield", "reading_count"]]
+    results = results.sort_values("total_yield", ascending=False).head(limit)
+    payload: list[dict[str, Any]] = []
+    for _, row in results.iterrows():
+        item = {
+            "plant_id": _id_string(row["plant_id"]),
+            "plant_name": _plant_name(context, row["plant_id"]),
+            "total_yield": float(row["total_yield"]),
+            "reading_count": int(row["reading_count"]),
+        }
+        if group == "inverter":
+            item["inverter_id"] = str(row["inverter_id"])
+        payload.append(item)
+    return {
+        "ok": True,
+        "metric": "total_yield",
+        "window": _normalize_window(window),
+        "aggregate_by": group,
+        "matched_readings": int(len(frame)),
+        "window_start": _iso(frame["timestamp"].min()),
+        "window_end": _iso(frame["timestamp"].max()),
+        "results": payload,
+    }
+
+
 def register(registry: ToolRegistry) -> None:
     registry.register(
         ToolSpec(
@@ -270,7 +326,7 @@ def register(registry: ToolRegistry) -> None:
                 "properties": {
                     "plant": {"type": "string", "description": "Filter by plant_id or plant name."},
                     "inverter": {"type": "string", "description": "Filter by inverter_id."},
-                    "window": {"type": "string", "enum": sorted(_WINDOWS), "description": "Dataset-anchored time window."},
+                    "window": {"type": "string", "enum": sorted(_WINDOWS), "description": "Dataset-anchored time window. If the user asks for yield without an explicit window, use last_week."},
                     "aggregate_by": {"type": "string", "enum": sorted(_AGGREGATE_BY), "description": "Return plant- or inverter-level aggregates."},
                     "limit": {"type": "integer", "description": "Maximum number of ranked results to return (1-20)."},
                 },
@@ -322,6 +378,27 @@ def register(registry: ToolRegistry) -> None:
             handler=mttr_metric,
         )
     )
+    registry.register(
+        ToolSpec(
+            name="total_yield",
+            description=(
+                "Compute generated energy from cumulative total_yield readings as last minus first "
+                "over a dataset-anchored window, grouped by plant or inverter. Use for total energy generated."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "plant": {"type": "string", "description": "Filter by plant_id or plant name."},
+                    "inverter": {"type": "string", "description": "Filter by inverter_id."},
+                    "window": {"type": "string", "enum": sorted(_WINDOWS), "description": "Dataset-anchored time window."},
+                    "aggregate_by": {"type": "string", "enum": sorted(_AGGREGATE_BY), "description": "Return plant- or inverter-level aggregates."},
+                    "limit": {"type": "integer", "description": "Maximum number of ranked results to return (1-20)."},
+                },
+                "additionalProperties": False,
+            },
+            handler=total_yield_metric,
+        )
+    )
 
 
 def _empty_metric(metric: str, *, window: str, aggregate_by: str) -> dict[str, Any]:
@@ -361,7 +438,7 @@ def _filter_window(frame: pd.DataFrame, column: str, window: str | None, context
 
 
 def _window_bounds(context: ToolContext, window: str | None) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
-    anchor = pd.Timestamp(context.data.dataset_today())
+    anchor = pd.Timestamp(context.effective_now())
     mode = _normalize_window(window)
     if mode == "today":
         return anchor.normalize(), anchor

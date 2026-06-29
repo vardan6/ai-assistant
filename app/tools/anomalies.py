@@ -30,7 +30,10 @@ PARAMETERS: dict[str, Any] = {
     "properties": {
         "plant": {"type": "string", "description": "Filter by plant_id or plant name."},
         "inverter": {"type": "string", "description": "Filter by inverter_id."},
-        "status": {"type": "string", "description": "Filter by anomaly status."},
+        "status": {
+            "type": "string",
+            "description": "Filter by anomaly status. Use 'unresolved' for unresolved/current anomalies; it includes open, monitoring, and scheduled_repair.",
+        },
         "severity": {"type": "string", "description": "Filter by anomaly severity."},
         "anomaly_type": {"type": "string", "description": "Filter by anomaly type."},
         "cause": {"type": "string", "description": "Filter by anomaly cause."},
@@ -51,16 +54,22 @@ def anomalies_lookup(
     source = context.data.table("anomalies")
     frame = filter_plant(source, context, plant)
     frame = filter_exact(frame, "inverter_id", inverter)
-    frame = filter_exact(frame, "status", status)
+    frame = _filter_status(frame, status)
     frame = filter_exact(frame, "severity", severity)
-    frame = filter_exact(frame, "anomaly_type", anomaly_type)
+    frame = filter_exact(frame, "anomaly_type", _normalize_anomaly_type(anomaly_type))
     frame = filter_exact(frame, "cause", cause)
+    status_counts = counts(frame, "status")
     return {
         "ok": True,
         "total_anomalies": int(len(source)),
         "matched": int(len(frame)),
-        "status_counts": counts(frame, "status"),
+        "anomaly_ids": [int(value) for value in frame["anomaly_id"].tolist()] if "anomaly_id" in frame.columns else [],
+        "status_counts": status_counts,
         "severity_counts": counts(frame, "severity"),
+        "summary": {
+            "matched": int(len(frame)),
+            "status_counts": status_counts,
+        },
         "anomalies": records(frame, _FIELDS),
     }
 
@@ -77,3 +86,23 @@ def register(registry: ToolRegistry) -> None:
             handler=anomalies_lookup,
         )
     )
+
+
+def _filter_status(frame, status: str | None):
+    if not status:
+        return frame
+    value = status.strip().lower()
+    if value in {"unresolved", "active"}:
+        return frame[frame["status"].astype(str).str.lower() != "resolved"]
+    return filter_exact(frame, "status", status)
+
+
+def _normalize_anomaly_type(anomaly_type: str | None) -> str | None:
+    if not anomaly_type:
+        return anomaly_type
+    value = anomaly_type.strip().lower()
+    if "multi hotspot" in value:
+        return "multi hotspot"
+    if "hotspot" in value:
+        return "hotspot"
+    return anomaly_type

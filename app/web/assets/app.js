@@ -8,6 +8,7 @@ const state = {
   ui: {
     default_gating_mode: "gated",
     verbose_trace: true,
+    use_reference_now_anchor: true,
   },
   appearance: {
     theme_mode: "light",
@@ -32,6 +33,8 @@ const state = {
   archivedSessionIds: new Set(),
   sidebarWidth: 438,
   workspaceHeight: 168,
+  totalWorkspaceHeight: 600,
+  workspaceHeightMode: "auto",
   isSending: false,
   abortController: null,
   lastQuestion: "",
@@ -57,6 +60,9 @@ const UI_STATE_STORAGE_KEY = "solar-ai-ui-state";
 const VALID_VIEWS = new Set(["chat", "settings"]);
 const VALID_SUBTABS = new Set(["appearance", "ai", "providers", "rag", "dataset", "config-io"]);
 const VALID_GATING_MODES = new Set(["gated", "bind_all"]);
+const COPY_FEEDBACK_RESET_MS = 1400;
+const DEFAULT_TOTAL_WORKSPACE_HEIGHT = 600;
+const WORKSPACE_BOTTOM_RESIZER_HEIGHT = 20;
 const DATASET_TABLE_NAMES = [
   "plants",
   "inverters",
@@ -392,6 +398,7 @@ const dom = {
   uiSettingsForm: document.querySelector("#ui-settings-form"),
   defaultGating: document.querySelector("#settings-default-gating"),
   verboseTrace: document.querySelector("#settings-verbose-trace"),
+  useReferenceNowAnchor: document.querySelector("#settings-use-reference-now-anchor"),
   providerTemplateSelect: document.querySelector("#provider-template-select"),
   providerApplyTemplate: document.querySelector("#provider-apply-template"),
   providersForm: document.querySelector("#providers-form"),
@@ -452,6 +459,7 @@ function wireEvents() {
   window.addEventListener("beforeunload", persistUIState);
   window.addEventListener("scroll", queuePersistUIState, { passive: true });
   window.addEventListener("hashchange", handleHashNavigation);
+  window.addEventListener("resize", handleWindowResize, { passive: true });
   initializeWorkspaceResizers();
   dom.tabButtons.forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
@@ -542,8 +550,8 @@ function wireEvents() {
       setStatus(error.message || "Delete failed.");
     });
   });
-  dom.copySessionButton.addEventListener("click", () => {
-    copyCurrentTranscript().catch((error) => {
+  dom.copySessionButton.addEventListener("click", (event) => {
+    copyCurrentTranscript({ includeToolDetail: event.shiftKey }).catch((error) => {
       console.error(error);
       setStatus(error.message || "Copy failed.");
     });
@@ -559,7 +567,7 @@ function wireEvents() {
       if (!actionButton) {
         return;
       }
-      handleMessageAction(actionButton.dataset.messageAction, Number(actionButton.dataset.messageIndex)).catch((error) => {
+      handleMessageAction(actionButton.dataset.messageAction, Number(actionButton.dataset.messageIndex), event.shiftKey).catch((error) => {
         console.error(error);
         setStatus(error.message || "Message action failed.");
       });
@@ -734,6 +742,7 @@ async function initialize() {
     {
       default_gating_mode: "gated",
       verbose_trace: true,
+      use_reference_now_anchor: true,
     },
     startupWarnings,
     "UI settings",
@@ -777,7 +786,11 @@ async function initialize() {
   state.archivedSessionIds = new Set(Array.isArray(storedUIState?.archivedSessionIds) ? storedUIState.archivedSessionIds : []);
   state.sidebarWidth = clampSidebarWidth(storedUIState?.sidebarWidth);
   state.workspaceHeight = clampWorkspaceHeight(storedUIState?.workspaceHeight);
-  state.totalWorkspaceHeight = clampTotalWorkspaceHeight(storedUIState?.totalWorkspaceHeight);
+  state.workspaceHeightMode = resolveStoredWorkspaceHeightMode(storedUIState?.workspaceHeightMode);
+  state.totalWorkspaceHeight = resolveInitialTotalWorkspaceHeight(
+    storedUIState?.totalWorkspaceHeight,
+    state.workspaceHeightMode,
+  );
   state.providerSort = resolveStoredProviderSort(storedUIState?.providerSort);
   restoreProviderEditorState(storedUIState?.providerEditor);
 
@@ -956,7 +969,7 @@ function renderMessageCard(message, index) {
         <button class="icon-button icon-button-xs" type="button" data-message-action="retry" data-message-index="${index}" title="Retry from last user prompt" aria-label="Retry from last user prompt">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v4H4l5 5 5-5h-4V5H8Zm8 10v4h-4l5 5 5-5h-4v-4h-2Zm-7.5 1.5L4 12l1.5-1.5L10 15l-1.5 1.5Z"/></svg>
         </button>
-        <button class="icon-button icon-button-xs" type="button" data-message-action="copy" data-message-index="${index}" title="Copy message" aria-label="Copy message">
+        <button class="icon-button icon-button-xs" type="button" data-message-action="copy" data-message-index="${index}" title="Copy message (Shift+click to include tool details)" aria-label="Copy message">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1Zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H10V7h9v14Z"/></svg>
         </button>
       </div>
@@ -1092,12 +1105,24 @@ function renderAgentActivity(metadata, message, index) {
       toolsWrap.appendChild(empty);
     } else {
       iteration.tools.forEach((tool) => {
-        const item = document.createElement("div");
-        item.className = `trace-tool-card${tool.pending ? " is-pending" : ""}`;
+        const hasArgs = tool.args && Object.keys(tool.args).length > 0;
+        const hasResult = !tool.pending && tool.result && Object.keys(tool.result).length > 0;
+        const argsBlock = hasArgs
+          ? `<div class="trace-tool-block"><div class="trace-tool-block-label">Arguments</div><pre>${escapeHtml(prettyToolJson(tool.args, 2400))}</pre></div>`
+          : "";
+        const resultBlock = hasResult
+          ? `<div class="trace-tool-block"><div class="trace-tool-block-label">Result</div><pre>${escapeHtml(prettyToolJson(tool.result))}</pre></div>`
+          : tool.pending ? `<div class="trace-tool-note">Waiting for tool result.</div>` : "";
+        const bodyContent = argsBlock + resultBlock;
+        const item = document.createElement("details");
+        item.className = `trace-tool-card${tool.pending ? " is-pending" : ""}${bodyContent ? "" : " no-body"}`;
         item.innerHTML = `
-          <div class="trace-tool-dot"></div>
-          <div class="trace-tool-name">${escapeHtml(tool.name || "tool")}</div>
-          <div class="trace-tool-meta">${escapeHtml(formatActivityToolMeta(tool))}</div>
+          <summary class="trace-tool-summary">
+            <span class="trace-tool-dot"></span>
+            <span class="trace-tool-name">${escapeHtml(tool.name || "tool")}</span>
+            <span class="trace-tool-meta">${escapeHtml(formatActivityToolMeta(tool))}</span>
+          </summary>
+          ${bodyContent ? `<div class="trace-tool-body">${bodyContent}</div>` : ""}
         `;
         toolsWrap.appendChild(item);
       });
@@ -1257,6 +1282,18 @@ function normalizeStopReason(reason) {
   return String(reason || "complete").trim().toLowerCase().replaceAll(" ", "_");
 }
 
+function prettyToolJson(value, maxChars = 3600) {
+  try {
+    const json = JSON.stringify(value, null, 2);
+    if (maxChars > 0 && json.length > maxChars) {
+      return `${json.slice(0, maxChars)}\n… [truncated, ${json.length} chars total]`;
+    }
+    return json;
+  } catch {
+    return String(value);
+  }
+}
+
 function selectUsageSnapshot(telemetry) {
   const totalUsage = telemetry.total_usage;
   if (totalUsage && typeof totalUsage === "object") {
@@ -1318,6 +1355,7 @@ function renderProviderControls() {
 function renderUISettings() {
   dom.defaultGating.value = state.ui.default_gating_mode || "gated";
   dom.verboseTrace.checked = Boolean(state.ui.verbose_trace);
+  dom.useReferenceNowAnchor.checked = Boolean(state.ui.use_reference_now_anchor);
 }
 
 function renderProviderTemplateOptions() {
@@ -1469,6 +1507,7 @@ async function saveUISettings() {
   const payload = {
     default_gating_mode: dom.defaultGating.value,
     verbose_trace: dom.verboseTrace.checked,
+    use_reference_now_anchor: dom.useReferenceNowAnchor.checked,
   };
   state.ui = await api("/api/settings/ui", {
     method: "PUT",
@@ -1765,13 +1804,25 @@ async function deleteCurrentSession() {
   await deleteSessionById(state.sessionId);
 }
 
-async function copyCurrentTranscript() {
+async function copyCurrentTranscript(options = {}) {
   if (!state.messages.length) {
     return;
   }
-  const transcript = serializeConversationToMarkdown();
-  await navigator.clipboard.writeText(transcript);
-  setStatus("Transcript copied");
+  const transcript = serializeConversationToMarkdown(options);
+  const includeToolDetail = Boolean(options.includeToolDetail);
+  try {
+    await writeClipboardText(transcript);
+    flashCopyFeedback(dom.copySessionButton, {
+      defaultTitle: "Copy transcript",
+      activeTitle: includeToolDetail ? "Copied (with tools)" : "Copied transcript",
+      defaultLabel: "Copy transcript",
+      activeLabel: includeToolDetail ? "Copied (with tools)" : "Copied transcript",
+    });
+    setStatus(includeToolDetail ? "Transcript copied (with tool details)" : "Transcript copied");
+  } catch (error) {
+    downloadTranscriptFallback(transcript);
+    setStatus("Clipboard blocked. Transcript downloaded as markdown.");
+  }
 }
 
 async function handleSessionListAction(action, sessionId) {
@@ -1831,7 +1882,7 @@ async function deleteSessionById(sessionId) {
   setStatus("Chat deleted");
 }
 
-async function handleMessageAction(action, index) {
+async function handleMessageAction(action, index, shiftKey = false) {
   const message = state.messages[index];
   if (!message) {
     return;
@@ -1846,8 +1897,54 @@ async function handleMessageAction(action, index) {
     return;
   }
   if (action === "copy") {
-    await navigator.clipboard.writeText(serializeMessageToMarkdown(message, index, { includeHeading: true }));
-    setStatus("Message copied");
+    await writeClipboardText(serializeMessageToMarkdown(message, index, { includeHeading: true, includeToolDetail: shiftKey }));
+    setStatus(shiftKey ? "Message copied (with tool details)" : "Message copied");
+  }
+}
+
+async function writeClipboardText(text) {
+  const payload = String(text ?? "");
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(payload);
+      return;
+    } catch (error) {
+      console.warn("Clipboard API write failed, falling back to execCommand.", error);
+    }
+  }
+
+  const buffer = document.createElement("textarea");
+  buffer.value = payload;
+  buffer.setAttribute("aria-hidden", "true");
+  buffer.style.position = "fixed";
+  buffer.style.top = "0";
+  buffer.style.left = "0";
+  buffer.style.width = "1px";
+  buffer.style.height = "1px";
+  buffer.style.opacity = "0";
+  buffer.style.pointerEvents = "none";
+  buffer.style.zIndex = "-1";
+  document.body.appendChild(buffer);
+  const selection = document.getSelection();
+  const priorRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  buffer.focus({ preventScroll: true });
+  buffer.select();
+  buffer.setSelectionRange(0, buffer.value.length);
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Clipboard copy is unavailable in this browser.");
+    }
+  } finally {
+    buffer.remove();
+    if (selection) {
+      selection.removeAllRanges();
+      if (priorRange) {
+        selection.addRange(priorRange);
+      }
+    }
+    activeElement?.focus?.({ preventScroll: true });
   }
 }
 
@@ -2192,6 +2289,7 @@ function buildUIStateSnapshot() {
     sidebarWidth: clampSidebarWidth(state.sidebarWidth),
     workspaceHeight: clampWorkspaceHeight(state.workspaceHeight),
     totalWorkspaceHeight: clampTotalWorkspaceHeight(state.totalWorkspaceHeight),
+    workspaceHeightMode: state.workspaceHeightMode === "manual" ? "manual" : "auto",
     providerSort: {
       key: state.providerSort.key || "display_name",
       direction: state.providerSort.direction === "desc" ? "desc" : "asc",
@@ -2239,6 +2337,10 @@ function resolveStoredProviderSort(snapshot) {
     key: String(snapshot.key || "display_name"),
     direction: snapshot.direction === "desc" ? "desc" : "asc",
   };
+}
+
+function resolveStoredWorkspaceHeightMode(mode) {
+  return mode === "manual" ? "manual" : "auto";
 }
 
 function restoreProviderEditorState(snapshot) {
@@ -2295,6 +2397,49 @@ function restoreScrollPosition(scrollY) {
   });
 }
 
+function resolveInitialTotalWorkspaceHeight(storedHeight, mode = "auto") {
+  const value = Number(storedHeight || 0);
+  if (mode === "manual" && Number.isFinite(value) && value > 0) {
+    return clampTotalWorkspaceHeight(value);
+  }
+  return getViewportFittedWorkspaceHeight();
+}
+
+function handleWindowResize() {
+  if (state.workspaceHeightMode !== "manual") {
+    state.totalWorkspaceHeight = getViewportFittedWorkspaceHeight();
+    applyWorkspaceLayout();
+  }
+  queuePersistUIState();
+}
+
+function getViewportFittedWorkspaceHeight() {
+  if (!(dom.chatWorkspace instanceof HTMLElement)) {
+    return clampTotalWorkspaceHeight(DEFAULT_TOTAL_WORKSPACE_HEIGHT);
+  }
+  const page = dom.chatWorkspace.closest(".page");
+  if (page instanceof HTMLElement) {
+    const pageRect = page.getBoundingClientRect();
+    const pageStyles = window.getComputedStyle(page);
+    const pageBottomPadding = Number.parseFloat(pageStyles.paddingBottom || "0") || 0;
+    const topOffset = dom.chatWorkspace.getBoundingClientRect().top;
+    const availableHeight = Math.floor(pageRect.bottom - pageBottomPadding - topOffset - WORKSPACE_BOTTOM_RESIZER_HEIGHT);
+    if (Number.isFinite(availableHeight) && availableHeight > 0) {
+      return clampTotalWorkspaceHeight(availableHeight);
+    }
+  }
+  const viewportHeight = Number(window.innerHeight || document.documentElement?.clientHeight || 0);
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
+    return clampTotalWorkspaceHeight(DEFAULT_TOTAL_WORKSPACE_HEIGHT);
+  }
+  const topOffset = dom.chatWorkspace.getBoundingClientRect().top;
+  const availableHeight = Math.floor(viewportHeight - topOffset - WORKSPACE_BOTTOM_RESIZER_HEIGHT);
+  if (!Number.isFinite(availableHeight) || availableHeight <= 0) {
+    return clampTotalWorkspaceHeight(DEFAULT_TOTAL_WORKSPACE_HEIGHT);
+  }
+  return clampTotalWorkspaceHeight(availableHeight);
+}
+
 function initializeWorkspaceResizers() {
   attachPointerResizer(dom.sidebarResizer, "x", (delta) => {
     state.sidebarWidth = clampSidebarWidth(state.sidebarWidth + delta);
@@ -2307,6 +2452,7 @@ function initializeWorkspaceResizers() {
     queuePersistUIState();
   });
   attachPointerResizer(dom.workspaceBottomResizer, "y", (delta) => {
+    state.workspaceHeightMode = "manual";
     state.totalWorkspaceHeight = clampTotalWorkspaceHeight(state.totalWorkspaceHeight + delta);
     applyWorkspaceLayout();
     queuePersistUIState();
@@ -2355,7 +2501,7 @@ function clampWorkspaceHeight(height) {
 
 function clampTotalWorkspaceHeight(height) {
   const value = Number(height || 0);
-  return Math.max(300, Math.min(1600, Number.isFinite(value) ? value : 600));
+  return Math.max(300, Math.min(1600, Number.isFinite(value) ? value : DEFAULT_TOTAL_WORKSPACE_HEIGHT));
 }
 
 function getActiveViewName() {
@@ -3317,15 +3463,16 @@ function sanitizeHref(url) {
   return "";
 }
 
-function serializeConversationToMarkdown() {
+function serializeConversationToMarkdown(options = {}) {
   const session = state.sessions.find((item) => item.id === state.sessionId);
   const title = session?.title || dom.chatTitle?.textContent?.trim() || "New chat";
-  const anchorMessage = state.messages.find((message) => message.created_at) || state.messages[0];
+  const transcriptMessages = getTranscriptMessages();
+  const anchorMessage = transcriptMessages.find((message) => message.created_at) || transcriptMessages[0];
   const headingStamp = formatCopyHeadingDate(anchorMessage?.metadata?.telemetry?.finished_at || anchorMessage?.created_at);
   const lines = [`# Chat: ${title}${headingStamp ? ` — ${headingStamp}` : ""}`];
 
-  state.messages.forEach((message, index) => {
-    lines.push("", serializeMessageToMarkdown(message, index, { includeHeading: false }));
+  transcriptMessages.forEach((message, index) => {
+    lines.push("", serializeMessageToMarkdown(message, index, { includeHeading: false, ...options }));
   });
 
   return lines.join("\n").trim();
@@ -3333,7 +3480,9 @@ function serializeConversationToMarkdown() {
 
 function serializeMessageToMarkdown(message, index, options = {}) {
   const includeHeading = Boolean(options.includeHeading);
+  const includeToolDetail = Boolean(options.includeToolDetail);
   const lines = [];
+  const body = resolveMessageCopyBody(message, index);
   if (includeHeading) {
     const session = state.sessions.find((item) => item.id === state.sessionId);
     const title = session?.title || dom.chatTitle?.textContent?.trim() || "New chat";
@@ -3343,12 +3492,13 @@ function serializeMessageToMarkdown(message, index, options = {}) {
 
   lines.push(buildMessageCopyHeader(message));
   lines.push("");
-  lines.push(message.content || "");
+  lines.push(body);
 
   if (message.role === "assistant") {
     const metadata = message.metadata || {};
-    if (state.ui.verbose_trace && shouldRenderAgentActivity(metadata) && isAgentActivityOpen(message, index)) {
-      lines.push("", serializeAgentActivityToMarkdown(metadata));
+    const showActivity = (state.ui.verbose_trace && isAgentActivityOpen(message, index)) || includeToolDetail;
+    if (showActivity && shouldRenderAgentActivity(metadata)) {
+      lines.push("", serializeAgentActivityToMarkdown(metadata, { includeToolDetail }));
     }
     const stats = serializeAssistantStatsToMarkdown(message);
     if (stats) {
@@ -3357,6 +3507,109 @@ function serializeMessageToMarkdown(message, index, options = {}) {
   }
 
   return lines.join("\n").trim();
+}
+
+function getTranscriptMessages() {
+  return state.messages.filter((message) => {
+    if (!message || (message.role !== "user" && message.role !== "assistant")) {
+      return false;
+    }
+    if (message.role === "user") {
+      return Boolean(resolveMessageCopyBody(message));
+    }
+    return Boolean(resolveMessageCopyBody(message) || message.metadata);
+  });
+}
+
+function resolveMessageCopyBody(message, index = -1) {
+  const content = message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    const resolved = content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object") {
+          if (typeof item.text === "string") {
+            return item.text;
+          }
+          if (typeof item.content === "string") {
+            return item.content;
+          }
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+    if (resolved) {
+      return resolved;
+    }
+  }
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") {
+      return content.text;
+    }
+    if (typeof content.content === "string") {
+      return content.content;
+    }
+  }
+  return readRenderedMessageContent(index);
+}
+
+function readRenderedMessageContent(index) {
+  if (!Number.isInteger(index) || index < 0 || !dom.messages) {
+    return "";
+  }
+  const card = dom.messages.children[index];
+  if (!(card instanceof HTMLElement)) {
+    return "";
+  }
+  const content = card.querySelector(".message-content");
+  if (!(content instanceof HTMLElement)) {
+    return "";
+  }
+  return String(content.innerText || content.textContent || "").trim();
+}
+
+function flashCopyFeedback(button, options = {}) {
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  const defaultTitle = options.defaultTitle || button.dataset.defaultTitle || button.title || "";
+  const defaultLabel = options.defaultLabel || button.dataset.defaultLabel || button.getAttribute("aria-label") || "";
+  button.dataset.defaultTitle = defaultTitle;
+  button.dataset.defaultLabel = defaultLabel;
+  button.classList.add("is-copied");
+  button.title = options.activeTitle || "Copied";
+  button.setAttribute("aria-label", options.activeLabel || "Copied");
+  window.clearTimeout(button._copyFeedbackTimer);
+  button._copyFeedbackTimer = window.setTimeout(() => {
+    button.classList.remove("is-copied");
+    button.title = button.dataset.defaultTitle || defaultTitle;
+    button.setAttribute("aria-label", button.dataset.defaultLabel || defaultLabel);
+  }, COPY_FEEDBACK_RESET_MS);
+}
+
+function downloadTranscriptFallback(transcript) {
+  const session = state.sessions.find((item) => item.id === state.sessionId);
+  const title = session?.title || dom.chatTitle?.textContent?.trim() || "chat";
+  const safeTitle = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "chat";
+  const blob = new Blob([String(transcript ?? "")], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${safeTitle}-transcript.md`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function buildMessageCopyHeader(message) {
@@ -3387,7 +3640,8 @@ function buildAssistantCopyIdentity(message) {
   return parts.join(" · ");
 }
 
-function serializeAgentActivityToMarkdown(metadata) {
+function serializeAgentActivityToMarkdown(metadata, options = {}) {
+  const includeToolDetail = Boolean(options.includeToolDetail);
   const activity = buildAgentActivityModel(metadata);
   const lines = ["### Agent activity", "", "**Agent run**"];
   const context = buildAgentActivityContext(metadata);
@@ -3405,7 +3659,7 @@ function serializeAgentActivityToMarkdown(metadata) {
       return;
     }
     iteration.tools.forEach((tool) => {
-      lines.push(`- \`${tool.name || "tool"}\`${formatActivityToolMarkdown(tool)}`);
+      lines.push(`- \`${tool.name || "tool"}\`${formatActivityToolMarkdown(tool, { includeToolDetail })}`);
     });
   });
 
@@ -3430,7 +3684,8 @@ function buildAgentActivityContext(metadata) {
   return items;
 }
 
-function formatActivityToolMarkdown(tool) {
+function formatActivityToolMarkdown(tool, options = {}) {
+  const includeToolDetail = Boolean(options.includeToolDetail);
   const parts = [];
   Object.entries(tool.args || {}).forEach(([key, value]) => {
     parts.push(`${key}: ${summarizeActivityValue(value)}`);
@@ -3445,7 +3700,18 @@ function formatActivityToolMarkdown(tool) {
   if (tool.latencyMs > 0) {
     parts.push(`${tool.latencyMs} ms`);
   }
-  return parts.length ? ` · ${parts.join(" · ")}` : "";
+  let base = parts.length ? ` · ${parts.join(" · ")}` : "";
+  if (includeToolDetail) {
+    const hasArgs = tool.args && Object.keys(tool.args).length > 0;
+    const hasResult = !tool.pending && tool.result && Object.keys(tool.result).length > 0;
+    if (hasArgs) {
+      base += `\n  **Arguments:**\n\`\`\`json\n${prettyToolJson(tool.args, 2400)}\n\`\`\``;
+    }
+    if (hasResult) {
+      base += `\n  **Result:**\n\`\`\`json\n${prettyToolJson(tool.result)}\n\`\`\``;
+    }
+  }
+  return base;
 }
 
 function serializeAssistantStatsToMarkdown(message) {

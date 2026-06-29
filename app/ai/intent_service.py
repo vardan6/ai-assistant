@@ -81,7 +81,7 @@ def _invoke_with_repair(model: Any, system: str, user: str, *, repair_attempts: 
     raw = model.invoke(messages)
     usage = usage_from_response(raw)
     raw_text = str(getattr(raw, "content", raw) or "")
-    intent, errors = _parse_intent_json(raw_text)
+    intent, errors = _parse_intent_json(raw_text, question=user)
     if not errors:
         return intent, [], usage.as_dict()
 
@@ -97,13 +97,13 @@ def _invoke_with_repair(model: Any, system: str, user: str, *, repair_attempts: 
         raw = model.invoke(repair)
         usage = usage.add(usage_from_response(raw))
         raw_text = str(getattr(raw, "content", raw) or "")
-        intent, errors = _parse_intent_json(raw_text)
+        intent, errors = _parse_intent_json(raw_text, question=user)
         if not errors:
             return intent, [], usage.as_dict()
     return intent, errors, usage.as_dict()
 
 
-def _parse_intent_json(text: str) -> tuple[dict[str, Any], list[str]]:
+def _parse_intent_json(text: str, *, question: str = "") -> tuple[dict[str, Any], list[str]]:
     clean = text.strip()
     clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.MULTILINE)
     clean = re.sub(r"\s*```$", "", clean, flags=re.MULTILINE).strip()
@@ -119,4 +119,4 @@ def _parse_intent_json(text: str) -> tuple[dict[str, Any], list[str]]:
         return make_empty_intent(), ["parsed JSON is not an object"]
 
     errors = validate_intent(data)
-    return coerce_intent(data), errors
+    return coerce_intent(data, question=question), errors

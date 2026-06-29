@@ -1,3 +1,4 @@
+from datetime import datetime
 from math import isclose
 from types import SimpleNamespace
 
@@ -47,6 +48,20 @@ def test_mttr_matches_critical_alert_mean_time_to_resolve():
     assert result["unit"] == "hours"
     assert isclose(result["results"][0]["mean_time_to_resolve_hours"], 6.34462962962963, rel_tol=0, abs_tol=1e-9)
     assert result["results"][0]["resolved_alerts"] == 6
+
+
+def test_last_week_window_can_fall_back_to_wall_clock():
+    registry = build_registry()
+    result = registry.invoke(
+        "daily_yield",
+        {"plant": "Rajasthan Solar Park", "window": "last_week", "aggregate_by": "plant"},
+        ToolContext(
+            data=PandasDataSource(load_config().csv_dir),
+            reference_now=lambda: datetime.fromisoformat("2026-06-30T12:00:00"),
+        ),
+    )
+    assert result["ok"] is True
+    assert result["results"] == []
 
 
 def test_pipeline_refuses_explicit_out_of_scope_question(monkeypatch):

@@ -49,7 +49,7 @@ def validate_intent(data: dict[str, Any]) -> list[str]:
     return errors
 
 
-def coerce_intent(data: dict[str, Any]) -> dict[str, Any]:
+def coerce_intent(data: dict[str, Any], *, question: str = "") -> dict[str, Any]:
     """Merge a parsed dict onto the empty shape so every field is present."""
     base = make_empty_intent()
     if isinstance(data.get("types"), list):
@@ -63,6 +63,41 @@ def coerce_intent(data: dict[str, Any]) -> dict[str, Any]:
         base["time_range"] = str(data["time_range"])
     if data.get("metric") is not None:
         base["metric"] = str(data["metric"])
+    metric = str(base["metric"] or "").lower()
+    summary = str(data.get("summary", "")).lower()
+    question_text = str(question or "").lower()
+    combined = " ".join(part for part in (question_text, summary, metric) if part)
+    if "weather" in metric:
+        _ensure_type(base, "A")
+        _ensure_type(base, "B")
+    if "anomal" in metric or "anomal" in summary:
+        _ensure_type(base, "C")
+    if "performance" in metric or "performing worst" in summary:
+        _ensure_type(base, "B")
+    if _mentions_weather(combined):
+        _ensure_type(base, "A")
+        _ensure_type(base, "B")
+        if not base["metric"]:
+            base["metric"] = "weather"
+    if any(term in combined for term in ("feed-in tariff", "feed in tariff", " tariff")):
+        _ensure_type(base, "B")
+        base["metric"] = "tariff_usd_per_kwh"
+    if any(term in combined for term in ("performance ratio", "performing worst", "performing best")):
+        _ensure_type(base, "B")
+        base["metric"] = "performance_ratio"
+    if any(term in combined for term in ("total yield", "total energy", "energy generated")):
+        _ensure_type(base, "B")
+        base["metric"] = "total_yield"
+    if "daily yield" in combined:
+        _ensure_type(base, "B")
+        base["metric"] = "daily_yield"
+    if any(term in combined for term in ("mean time to resolve", "mttr")):
+        _ensure_type(base, "B")
+        base["metric"] = "mttr"
+    if any(term in combined for term in ("anomal", "hotspot", "soiling", "unresolved")):
+        _ensure_type(base, "C")
+        if not base["metric"]:
+            base["metric"] = "anomalies"
     base["out_of_scope"] = bool(data.get("out_of_scope", False))
     try:
         base["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
@@ -70,3 +105,24 @@ def coerce_intent(data: dict[str, Any]) -> dict[str, Any]:
         base["confidence"] = 0.0
     base["summary"] = str(data.get("summary", ""))
     return base
+
+
+def _ensure_type(intent: dict[str, Any], intent_type: str) -> None:
+    if intent_type not in intent["types"]:
+        intent["types"].append(intent_type)
+
+
+def _mentions_weather(text: str) -> bool:
+    return any(
+        term in text
+        for term in (
+            "weather",
+            "irradiation",
+            "cloud cover",
+            "rainfall",
+            "humidity",
+            "ambient temperature",
+            "module temperature",
+            "wind speed",
+        )
+    )

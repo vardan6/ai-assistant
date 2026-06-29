@@ -72,6 +72,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ui": {
         "default_gating_mode": "gated",
         "verbose_trace": True,
+        "use_reference_now_anchor": True,
     },
     "appearance": {
         "theme_mode": "light",
@@ -193,6 +194,10 @@ class AppConfig:
     @property
     def verbose_trace(self) -> bool:
         return bool(self.ui.get("verbose_trace", True))
+
+    @property
+    def use_reference_now_anchor(self) -> bool:
+        return bool(self.ui.get("use_reference_now_anchor", True))
 
     @property
     def appearance(self) -> dict[str, Any]:

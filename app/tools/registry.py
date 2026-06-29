@@ -9,6 +9,7 @@ unit-testable in isolation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 from ..data import DataSource
@@ -22,6 +23,12 @@ class ToolContext:
     """Everything a tool needs to do its work, injected at call time."""
 
     data: DataSource
+    reference_now: Callable[[], datetime] | None = None
+
+    def effective_now(self) -> datetime:
+        if self.reference_now is not None:
+            return self.reference_now()
+        return self.data.dataset_today()
 
 
 @dataclass(slots=True)

@@ -170,25 +170,6 @@ textarea {
   max-width: 46ch;
 }
 
-.chat-hero {
-  padding: 22px 24px;
-  background: color-mix(in srgb, var(--panel-strong) 96%, white 4%);
-}
-
-.chat-hero h2 {
-  margin: 0 0 10px;
-  font-size: clamp(1.6rem, 1.9vw, 2.1rem);
-  line-height: 1.08;
-}
-
-.chat-hero p:not(.eyebrow) {
-  max-width: 118ch;
-  margin: 0 0 12px;
-  color: var(--muted);
-  line-height: 1.55;
-  font-size: 1.03rem;
-}
-
 .chat-workspace {
   --sessions-pane-width: 438px;
   --composer-height: 168px;
@@ -602,12 +583,50 @@ textarea {
   background: color-mix(in srgb, var(--panel-strong) 96%, white 4%);
   color: var(--muted);
   cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
 .icon-button svg {
   width: 17px;
   height: 17px;
   fill: currentColor;
+}
+
+.copy-feedback-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.copy-feedback-button-icon {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.copy-feedback-button-icon-check {
+  opacity: 0;
+  transform: translateY(6px) scale(0.82);
+}
+
+.copy-feedback-button.is-copied {
+  color: var(--sage);
+  border-color: color-mix(in srgb, var(--sage) 36%, var(--line) 64%);
+  background: color-mix(in srgb, var(--panel-strong) 88%, var(--sage) 12%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--sage) 10%, transparent 90%);
+  transform: translateY(-1px);
+}
+
+.copy-feedback-button.is-copied .copy-feedback-button-icon-copy {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.82);
+}
+
+.copy-feedback-button.is-copied .copy-feedback-button-icon-check {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 .icon-button-xs {
@@ -1151,18 +1170,54 @@ textarea {
 }
 
 .trace-tool-card {
-  display: grid;
-  grid-template-columns: 10px minmax(0, auto) minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 11px 12px;
   border-radius: 14px;
   background: var(--trace-bg);
   border: 1px solid var(--trace-line);
+  overflow: hidden;
 }
 
 .trace-tool-card.is-pending {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line) 70%);
+}
+
+.trace-tool-summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, auto) minmax(0, 1fr) 12px;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 12px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.trace-tool-summary::-webkit-details-marker {
+  display: none;
+}
+
+.trace-tool-card.no-body > .trace-tool-summary {
+  grid-template-columns: 10px minmax(0, auto) minmax(0, 1fr);
+  cursor: default;
+}
+
+.trace-tool-summary::after {
+  content: "";
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 0.15s ease;
+  opacity: 0.5;
+}
+
+.trace-tool-card.no-body > .trace-tool-summary::after {
+  display: none;
+}
+
+details.trace-tool-card[open] > .trace-tool-summary::after {
+  transform: rotate(225deg) translateY(1px);
 }
 
 .trace-tool-dot {
@@ -1186,6 +1241,41 @@ textarea {
 
 .trace-empty {
   margin-left: 20px;
+}
+
+.trace-tool-body {
+  border-top: 1px solid var(--trace-line);
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.trace-tool-block {
+  display: grid;
+  gap: 4px;
+}
+
+.trace-tool-block-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.trace-tool-block pre {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ink);
+}
+
+.trace-tool-note {
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-style: italic;
 }
 
 .meta-row {

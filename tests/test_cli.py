@@ -41,7 +41,7 @@ def test_cli_one_shot_creates_session_and_prints_answer(monkeypatch, capsys):
         if url.endswith("/health"):
             return {"ok": True, "dataset_today": "2026-06-22T23:50:00"}
         if url.endswith("/api/sessions"):
-            return {"id": "sess-new", "title": "CLI chat"}
+            return {"id": "sess-new", "title": "CLI one-shot: offline plants"}
         raise AssertionError(f"Unexpected request: {method} {url}")
 
     def fake_stream_chat(base_url: str, payload: dict):
@@ -56,7 +56,11 @@ def test_cli_one_shot_creates_session_and_prints_answer(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_http_json", fake_http_json)
     monkeypatch.setattr(cli, "_stream_chat", fake_stream_chat)
 
-    rc = cli.main(["--server", "http://127.0.0.1:9006", "--prompt", "Which plants are offline?"])
+    rc = cli.main([
+        "--server", "http://127.0.0.1:9006",
+        "--title", "CLI one-shot: offline plants",
+        "--prompt", "Which plants are offline?",
+    ])
 
     out = capsys.readouterr()
     assert rc == 0
@@ -65,7 +69,7 @@ def test_cli_one_shot_creates_session_and_prints_answer(monkeypatch, capsys):
     assert "usage: in=5 out=3 total=8 time=1000ms" in out.err
     assert calls == [
         ("GET", "http://127.0.0.1:9006/health", None),
-        ("POST", "http://127.0.0.1:9006/api/sessions", {"title": "CLI chat"}),
+        ("POST", "http://127.0.0.1:9006/api/sessions", {"title": "CLI one-shot: offline plants"}),
     ]
 
 

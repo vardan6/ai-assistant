@@ -30,6 +30,24 @@ def _write_malformed_plants_csv(path: Path) -> None:
     path.write_text("plant_id\nP1\nP2\nP3\n", encoding="utf-8")
 
 
+def _dataset_zip_base64(default_dir: Path) -> str:
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        for table_name in (
+            "plants",
+            "inverters",
+            "generation_readings",
+            "weather_readings",
+            "alerts",
+            "anomalies",
+            "maintenance",
+        ):
+            archive.write(default_dir / f"{table_name}.csv", arcname=f"nested/{table_name.upper()}.csv")
+        archive.writestr("nested/ignored.txt", "ignored")
+    archive_bytes.seek(0)
+    return base64.b64encode(archive_bytes.getvalue()).decode("ascii")
+
+
 def test_secret_store_and_provider_settings_persist(tmp_path):
     settings_path = tmp_path / "common.local.json"
     config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=settings_path)
@@ -157,6 +175,7 @@ def test_server_streams_chat_and_persists_session(tmp_path):
 
     class FakePipeline:
         dataset_today = datetime.fromisoformat("2026-06-22T23:50:00")
+        reference_now = datetime.fromisoformat("2026-06-22T23:50:00")
 
         def answer(self, question, *, provider_id="", gating_mode="gated", event_handler=None):  # noqa: ARG002
             if event_handler is not None:
@@ -195,6 +214,8 @@ def test_server_streams_chat_and_persists_session(tmp_path):
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["dataset_today"] == "2026-06-22T23:50:00"
+    assert health.json()["reference_now"] == "2026-06-22T23:50:00"
+    assert health.json()["use_reference_now_anchor"] is True
 
     created = client.post("/api/sessions", json={"title": "CLI chat"})
     session_id = created.json()["id"]
@@ -230,6 +251,7 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     assert 'id="appearance-theme-mode"' in index.text
     assert 'id="dataset-settings-form"' in index.text
     assert 'id="dataset-import-zip-button"' in index.text
+    assert 'id="settings-use-reference-now-anchor"' in index.text
     assert 'data-dataset-upload-table="plants"' in index.text
     assert 'data-subtab="dataset"' in index.text
     assert 'value="sandstone_light"' in index.text
@@ -391,26 +413,11 @@ def test_dataset_upload_and_zip_import_are_atomic(tmp_path):
     unchanged = load_config(config.settings_path)
     assert unchanged.csv_files["plants"].startswith("data/managed_datasets/overrides/plants-")
 
-    archive_bytes = io.BytesIO()
-    with zipfile.ZipFile(archive_bytes, "w") as archive:
-        for table_name in (
-            "plants",
-            "inverters",
-            "generation_readings",
-            "weather_readings",
-            "alerts",
-            "anomalies",
-            "maintenance",
-        ):
-            archive.write(default_dir / f"{table_name}.csv", arcname=f"nested/{table_name.upper()}.csv")
-        archive.writestr("nested/ignored.txt", "ignored")
-    archive_bytes.seek(0)
-
     imported = client.post(
         "/api/settings/dataset/import-zip",
         json={
             "filename": "dataset.zip",
-            "content_base64": base64.b64encode(archive_bytes.getvalue()).decode("ascii"),
+            "content_base64": _dataset_zip_base64(default_dir),
         },
     )
     assert imported.status_code == 200
@@ -446,10 +453,6 @@ def test_dataset_upload_and_zip_import_are_atomic(tmp_path):
     assert failed.status_code == 400
     assert "missing required CSVs" in failed.json()["detail"]
 
-    unchanged = load_config(config.settings_path)
-    assert unchanged.csv_dir_setting == imported_config.csv_dir_setting
-    assert unchanged.csv_files == {}
-
     malformed_archive = io.BytesIO()
     with zipfile.ZipFile(malformed_archive, "w") as archive:
         for table_name in (
@@ -477,6 +480,73 @@ def test_dataset_upload_and_zip_import_are_atomic(tmp_path):
     unchanged = load_config(config.settings_path)
     assert unchanged.csv_dir_setting == imported_config.csv_dir_setting
     assert unchanged.csv_files == {}
+
+
+def test_managed_dataset_artifacts_are_pruned_after_successful_activation(tmp_path):
+    default_dir = ROOT_DIR / "input" / "tables-extracted"
+    alt_dir = _copy_dataset(tmp_path, "alt-dataset")
+    user_override = tmp_path / "plants-user.csv"
+    shutil.copy2(default_dir / "plants.csv", user_override)
+
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+    session_store = SessionStore(tmp_path / "sessions.sqlite3")
+    secret_store = SecretStore(tmp_path / "secrets.sqlite3")
+    client = TestClient(create_app(config=config, session_store=session_store, secret_store=secret_store))
+
+    first_upload = client.post(
+        "/api/settings/dataset/upload/plants",
+        json={
+            "filename": "plants.csv",
+            "content": (default_dir / "plants.csv").read_text(encoding="utf-8"),
+        },
+    )
+    assert first_upload.status_code == 200
+    first_override = ROOT_DIR / next(
+        item["override_path"]
+        for item in first_upload.json()["status"]["tables"]
+        if item["name"] == "plants"
+    )
+    assert first_override.exists()
+
+    second_upload = client.post(
+        "/api/settings/dataset/upload/plants",
+        json={
+            "filename": "plants.csv",
+            "content": (default_dir / "plants.csv").read_text(encoding="utf-8"),
+        },
+    )
+    assert second_upload.status_code == 200
+    second_override = ROOT_DIR / next(
+        item["override_path"]
+        for item in second_upload.json()["status"]["tables"]
+        if item["name"] == "plants"
+    )
+    assert second_override.exists()
+    assert first_override.exists() is False
+
+    imported = client.post(
+        "/api/settings/dataset/import-zip",
+        json={
+            "filename": "dataset.zip",
+            "content_base64": _dataset_zip_base64(default_dir),
+        },
+    )
+    assert imported.status_code == 200
+    managed_import_dir = ROOT_DIR / imported.json()["config"]["csv_dir"]
+    assert managed_import_dir.exists()
+    assert second_override.exists() is False
+
+    switched = client.put(
+        "/api/settings/dataset",
+        json={
+            "csv_dir": str(alt_dir),
+            "csv_files": {"plants": str(user_override)},
+        },
+    )
+    assert switched.status_code == 200
+    assert managed_import_dir.exists() is False
+    assert user_override.exists()
+    assert alt_dir.exists()
 
 
 def test_server_lists_and_executes_chat_commands(tmp_path):
@@ -556,16 +626,18 @@ def test_ui_settings_round_trip(tmp_path):
     assert original.json() == {
         "default_gating_mode": "gated",
         "verbose_trace": True,
+        "use_reference_now_anchor": True,
     }
 
     updated = client.put(
         "/api/settings/ui",
-        json={"default_gating_mode": "bind_all", "verbose_trace": False},
+        json={"default_gating_mode": "bind_all", "verbose_trace": False, "use_reference_now_anchor": False},
     )
     assert updated.status_code == 200
     assert updated.json() == {
         "default_gating_mode": "bind_all",
         "verbose_trace": False,
+        "use_reference_now_anchor": False,
     }
 
     reloaded = client.get("/api/settings/ui")
@@ -573,6 +645,7 @@ def test_ui_settings_round_trip(tmp_path):
     assert reloaded.json() == {
         "default_gating_mode": "bind_all",
         "verbose_trace": False,
+        "use_reference_now_anchor": False,
     }
 
 

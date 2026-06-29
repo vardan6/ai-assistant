@@ -68,6 +68,7 @@ class ProviderSettingsRequest(BaseModel):
 class UISettingsRequest(BaseModel):
     default_gating_mode: str = "gated"
     verbose_trace: bool = True
+    use_reference_now_anchor: bool = True
 
 
 class AppearanceSettingsRequest(BaseModel):
@@ -115,6 +116,54 @@ def _dataset_settings_payload(config: AppConfig) -> dict[str, Any]:
             for table_name in TABLE_NAMES
         },
     }
+
+
+def _resolve_storage_path(path_value: str) -> Path:
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    return path
+
+
+def _is_managed_dataset_path(path: Path) -> bool:
+    try:
+        path.relative_to(MANAGED_DATASET_ROOT)
+    except ValueError:
+        return False
+    return True
+
+
+def _managed_dataset_refs(config: AppConfig) -> set[Path]:
+    refs: set[Path] = set()
+    csv_dir_setting = str(config.csv_dir_setting or "").strip()
+    if csv_dir_setting:
+        csv_dir = _resolve_storage_path(csv_dir_setting)
+        if _is_managed_dataset_path(csv_dir):
+            refs.add(csv_dir)
+    for path_value in config.csv_files.values():
+        clean = str(path_value or "").strip()
+        if not clean:
+            continue
+        path = _resolve_storage_path(clean)
+        if _is_managed_dataset_path(path):
+            refs.add(path)
+    return refs
+
+
+def _prune_superseded_managed_datasets(previous: AppConfig, current: AppConfig) -> None:
+    stale_refs = sorted(
+        _managed_dataset_refs(previous) - _managed_dataset_refs(current),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for path in stale_refs:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def create_app(
@@ -183,7 +232,12 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "dataset_today": live_pipeline.dataset_today.isoformat()}
+        return {
+            "ok": True,
+            "dataset_today": live_pipeline.dataset_today.isoformat(),
+            "reference_now": live_pipeline.reference_now.isoformat(),
+            "use_reference_now_anchor": cfg.use_reference_now_anchor,
+        }
 
     @app.get("/")
     def index() -> FileResponse:
@@ -222,6 +276,7 @@ def create_app(
         return {
             "default_gating_mode": cfg.default_gating_mode,
             "verbose_trace": cfg.verbose_trace,
+            "use_reference_now_anchor": cfg.use_reference_now_anchor,
         }
 
     @app.put("/api/settings/ui")
@@ -232,11 +287,13 @@ def create_app(
             ui={
                 "default_gating_mode": request.default_gating_mode,
                 "verbose_trace": request.verbose_trace,
+                "use_reference_now_anchor": request.use_reference_now_anchor,
             },
         )
         return {
             "default_gating_mode": cfg.default_gating_mode,
             "verbose_trace": cfg.verbose_trace,
+            "use_reference_now_anchor": cfg.use_reference_now_anchor,
         }
 
     @app.get("/api/settings/appearance")
@@ -277,8 +334,10 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         candidate_pipeline = validate_pipeline(candidate_cfg)
+        previous_cfg = cfg
         cfg = save_config(candidate_cfg)
         live_pipeline = candidate_pipeline
+        _prune_superseded_managed_datasets(previous_cfg, cfg)
         return build_dataset_payload()
 
     @app.post("/api/settings/dataset/reload")
@@ -292,8 +351,10 @@ def create_app(
         nonlocal cfg, live_pipeline
         candidate_cfg = prepare_dataset_settings(cfg, data=copy.deepcopy(DEFAULT_SETTINGS["data"]))
         candidate_pipeline = validate_pipeline(candidate_cfg)
+        previous_cfg = cfg
         cfg = save_config(candidate_cfg)
         live_pipeline = candidate_pipeline
+        _prune_superseded_managed_datasets(previous_cfg, cfg)
         return build_dataset_payload()
 
     @app.post("/api/settings/dataset/upload/{table_name}")
@@ -318,8 +379,10 @@ def create_app(
         except HTTPException:
             managed_path.unlink(missing_ok=True)
             raise
+        previous_cfg = cfg
         cfg = save_config(candidate_cfg)
         live_pipeline = candidate_pipeline
+        _prune_superseded_managed_datasets(previous_cfg, cfg)
         return build_dataset_payload()
 
     @app.post("/api/settings/dataset/import-zip")
@@ -376,8 +439,10 @@ def create_app(
         except HTTPException:
             shutil.rmtree(managed_dir, ignore_errors=True)
             raise
+        previous_cfg = cfg
         cfg = save_config(candidate_cfg)
         live_pipeline = candidate_pipeline
+        _prune_superseded_managed_datasets(previous_cfg, cfg)
         return build_dataset_payload()
 
     @app.get("/api/settings/config")
@@ -419,11 +484,13 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         validate_pipeline(candidate_cfg)
+        previous_cfg = cfg
         cfg = save_config(candidate_cfg)
         secrets = SecretStore(cfg.llm_secrets_db_path)
         sessions = SessionStore(cfg.ai_sessions_db_path)
         evict_model_cache()
         live_pipeline = Pipeline(cfg, secret_resolver=secrets.get)
+        _prune_superseded_managed_datasets(previous_cfg, cfg)
         providers = [
             redact_provider(provider, has_secret=_has_secret(secrets, provider))
             for provider in cfg.llm_providers

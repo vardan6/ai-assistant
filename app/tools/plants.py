@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from .common import counts, records
+from .common import counts, records, resolve_plant_ids
 from .registry import ToolContext, ToolRegistry
 
 # Fields surfaced to the model — operational, not every CSV column.
@@ -20,6 +20,7 @@ _PLANT_FIELDS = [
     "region",
     "capacity_mw",
     "num_inverters",
+    "tariff_usd_per_kwh",
     "status",
     "grid_operator",
 ]
@@ -45,7 +46,7 @@ def plants_status(context: ToolContext, status: str | None = None, plant: str | 
     total = int(len(frame))
 
     if plant:
-        frame = _filter_by_plant(frame, plant)
+        frame = _filter_by_plant(frame, context, plant)
     if status:
         frame = frame[frame["status"].str.lower() == status.strip().lower()]
 
@@ -59,11 +60,11 @@ def plants_status(context: ToolContext, status: str | None = None, plant: str | 
     }
 
 
-def _filter_by_plant(frame: pd.DataFrame, plant: str) -> pd.DataFrame:
-    needle = str(plant).strip().lower()
-    by_id = frame["plant_id"].astype(str).str.lower() == needle
-    by_name = frame["name"].astype(str).str.lower() == needle
-    return frame[by_id | by_name]
+def _filter_by_plant(frame: pd.DataFrame, context: ToolContext, plant: str) -> pd.DataFrame:
+    matched_ids = resolve_plant_ids(context, plant)
+    if not matched_ids:
+        return frame.iloc[0:0]
+    return frame[frame["plant_id"].astype(str).isin(matched_ids)]
 
 
 def register(registry: ToolRegistry) -> None:
