@@ -28,8 +28,8 @@ from .data.source import TABLE_NAMES
 from .pipeline import Pipeline, PipelineAnswer
 from .provider_config import (
     export_config_payload,
-    import_config_payload,
     normalize_data_settings,
+    prepare_import_config_payload,
     prepare_dataset_settings,
     redact_provider,
     update_appearance_settings,
@@ -415,9 +415,11 @@ def create_app(
     def put_config_payload(request: ConfigImportRequest) -> dict[str, Any]:
         nonlocal cfg, live_pipeline, secrets, sessions
         try:
-            cfg = import_config_payload(cfg, payload=request.config)
+            candidate_cfg = prepare_import_config_payload(cfg, payload=request.config)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        validate_pipeline(candidate_cfg)
+        cfg = save_config(candidate_cfg)
         secrets = SecretStore(cfg.llm_secrets_db_path)
         sessions = SessionStore(cfg.ai_sessions_db_path)
         evict_model_cache()

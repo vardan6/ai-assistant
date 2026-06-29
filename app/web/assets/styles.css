@@ -349,15 +349,7 @@ textarea {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 8px;
   margin-top: 10px;
-}
-
-.session-item-id-label {
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 78%, transparent 22%);
 }
 
 .session-item-id {

@@ -35,6 +35,35 @@ choices must stay clean and unsurprising in a walkthrough.
 5. **Graceful degradation** — on ambiguous or unanswerable questions, say so clearly; never
    hallucinate a number. (Demo Q6 "revenue lost from downtime" is intentionally unanswerable.)
 
+## Coverage principle — the spec is a floor, not a ceiling
+
+The task's three intent types (A/B/C) and its suggested questions are the
+**minimum** the assistant must satisfy, not the boundary of the design. A more
+universal, reliable mechanism that subsumes a narrow spec ask is **preferred and
+counts as satisfied** — we are not constrained to mirror the A/B/C shape if our
+agent loop already covers those cases more generally and more dependably.
+
+The obligation is asymmetric:
+
+- Every concrete phrase/question/requirement in `solar_interview_task.md` **must
+  be covered** — verified to produce a correct result, or to refuse correctly.
+- *How* it is covered may be broader than the spec. If a wider implementation
+  serves a narrow requirement, that requirement is **met by superset** — treated
+  as done/better, not as a gap.
+- If our behavior deviates from the literal spec wording, the deviation must be
+  **justified as an improvement** (more universal, more reliable, broader
+  coverage) — never as a shortfall.
+
+This drives the status vocabulary the test plan uses to report each spec item:
+
+| Status | Meaning |
+|--------|---------|
+| ✅ **Covered** | Works exactly as the spec asks; verified against the oracle. |
+| ➕ **Met by superset** | A broader/more universal mechanism satisfies the narrow ask; verified. Counted as done/better. |
+| 🟡 **Working** | Implemented but not yet verified end-to-end (e.g. awaiting a CLI run). |
+| 🔧 **Needs work** | Known gap, defect, or unverified-and-suspect. |
+| ⛔ **Refuse (by design)** | Spec item is intentionally unanswerable; correct behavior is a clean refusal. |
+
 ## Acceptance criteria
 
 - Intent classification is logged/shown per question.

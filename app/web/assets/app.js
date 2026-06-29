@@ -711,7 +711,8 @@ async function initialize() {
   setStatus("Loading workspace");
   const storedUIState = readStoredUIState();
   const hashUIState = readHashUIState();
-  const [health, sessions, providersPayload, ui, appearance, dataset, commandsPayload] = await Promise.all([
+  const startupWarnings = [];
+  const [health, sessions, providersPayload, ui, appearance, dataset, commandsPayload] = await Promise.allSettled([
     api("/health"),
     api("/api/sessions"),
     api("/api/settings/providers"),
@@ -720,14 +721,55 @@ async function initialize() {
     api("/api/settings/dataset"),
     api("/api/chat/commands"),
   ]);
-  state.health = health;
-  state.sessions = sessions.sessions || [];
-  state.providers = providersPayload.llm_providers || [];
-  state.modelRouting = providersPayload.model_routing || {};
-  state.ui = ui;
-  state.appearance = readStoredAppearance() || appearance;
-  state.dataset = dataset;
-  state.commands = commandsPayload.commands || [];
+  state.health = readStartupPayload(health, { ok: false, dataset_today: "" }, startupWarnings, "health");
+  const sessionsPayload = readStartupPayload(sessions, { sessions: [] }, startupWarnings, "sessions");
+  const providersSettings = readStartupPayload(
+    providersPayload,
+    { llm_providers: [], model_routing: {} },
+    startupWarnings,
+    "provider settings",
+  );
+  state.ui = readStartupPayload(
+    ui,
+    {
+      default_gating_mode: "gated",
+      verbose_trace: true,
+    },
+    startupWarnings,
+    "UI settings",
+  );
+  const appearanceSettings = readStartupPayload(
+    appearance,
+    {
+      theme_mode: "light",
+      light_theme: "quiet_light",
+      dark_theme: "vscode_dark",
+    },
+    startupWarnings,
+    "appearance settings",
+  );
+  state.dataset = readStartupPayload(
+    dataset,
+    {
+      config: {
+        csv_dir: "",
+        csv_files: {},
+      },
+      status: {
+        dataset_today: "",
+        csv_dir_resolved: "",
+        tables: [],
+      },
+    },
+    startupWarnings,
+    "dataset settings",
+  );
+  const commandSettings = readStartupPayload(commandsPayload, { commands: [] }, startupWarnings, "chat commands");
+  state.sessions = Array.isArray(sessionsPayload.sessions) ? sessionsPayload.sessions : [];
+  state.providers = Array.isArray(providersSettings.llm_providers) ? providersSettings.llm_providers : [];
+  state.modelRouting = providersSettings.model_routing || {};
+  state.appearance = readStoredAppearance() || appearanceSettings;
+  state.commands = Array.isArray(commandSettings.commands) ? commandSettings.commands : [];
   state.selectedProviderId = resolveStoredProviderSelection(storedUIState?.selectedProviderId);
   state.gatingMode = "bind_all";
   state.sessionFilter = storedUIState?.sessionFilter === "archived" ? "archived" : "active";
@@ -758,17 +800,42 @@ async function initialize() {
   applyStoredNavigation(hashUIState, storedUIState);
 
   const initialSessionId = resolveInitialSessionId(storedUIState?.sessionId);
-  if (initialSessionId) {
-    await openSession(initialSessionId);
-  } else if (state.sessions.length > 0) {
-    await openSession(state.sessions[0].id);
-  } else {
+  try {
+    if (initialSessionId) {
+      await openSession(initialSessionId);
+    } else if (state.sessions.length > 0) {
+      await openSession(state.sessions[0].id);
+    } else {
+      renderMessages();
+    }
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof Error ? error.message : String(error);
+    startupWarnings.push(`session open failed: ${message}`);
+    state.sessionId = "";
+    state.messages = [];
+    renderSessions();
+    updateActiveSessionMeta();
     renderMessages();
   }
 
   restoreScrollPosition(storedUIState?.scrollY);
   persistUIState();
+  if (startupWarnings.length > 0) {
+    console.warn("Startup warnings:", startupWarnings);
+    setStatus(`Ready with ${startupWarnings.length} startup warning${startupWarnings.length === 1 ? "" : "s"}`);
+    return;
+  }
   setStatus("Ready");
+}
+
+function readStartupPayload(result, fallback, warnings, label) {
+  if (result.status === "fulfilled") {
+    return result.value;
+  }
+  const message = result.reason instanceof Error ? result.reason.message : String(result.reason || "Unknown error");
+  warnings.push(`${label}: ${message}`);
+  return fallback;
 }
 
 function renderHealth() {
@@ -814,7 +881,6 @@ function renderSessions() {
         <span class="session-item-preview">${escapeHtml(buildSessionPreview(session))}</span>
       </button>
       <div class="session-item-footer">
-        <span class="session-item-id-label">session id</span>
         <code class="session-item-id" title="${escapeAttr(session.id)}">${escapeHtml(session.id)}</code>
       </div>
     `;

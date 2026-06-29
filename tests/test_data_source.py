@@ -1,3 +1,5 @@
+import shutil
+
 from datetime import datetime
 
 from app.config import load_config
@@ -38,3 +40,20 @@ def test_table_returns_copy_not_cache():
     frame = source.table("plants")
     frame.loc[:, "status"] = "MUTATED"
     assert (source.table("plants")["status"] != "MUTATED").all()
+
+
+def test_rejects_parseable_dataset_with_missing_required_columns(tmp_path):
+    config = load_config()
+    dataset_dir = tmp_path / "dataset"
+    shutil.copytree(config.csv_dir, dataset_dir)
+    (dataset_dir / "plants.csv").write_text("plant_id\nP1\nP2\n", encoding="utf-8")
+
+    try:
+        PandasDataSource(dataset_dir)
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert str(exc) == (
+            "Dataset schema invalid for table 'plants': missing columns: "
+            "name, location, region, latitude, longitude, capacity_mw, num_inverters, "
+            "panel_type, tracker_type, commissioned_date, grid_operator, tariff_usd_per_kwh, status."
+        )

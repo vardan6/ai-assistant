@@ -39,7 +39,7 @@ API (shared token/timing footer format). One pipeline, two front-ends.
 ```
 question → [smalltalk fast-path?] → IntentClassifier (A/B/C + entities + out_of_scope)
         → tool gating (gated subset | bind_all)  → agent loop (iterative tool calls)
-        → tools (pandas aggregation, structured dicts) → synthesis (refusal-guarded)
+        → tools (pandas aggregation, structured dicts) → synthesis (explicit degradation)
         → answer + telemetry (intent, tool steps streamed, tokens/time footer)
 ```
 
@@ -56,6 +56,50 @@ performance_ratio, mttr) under a uniform registration pattern. Tools accept name
 loop can resolve `plant_id`/`inverter_id` then filter (the 2-step chain). Type B intent gating may
 bind the raw reading summaries and the derived metric tools together so the loop can choose the
 smallest sufficient tool for the question.
+
+### Tool redesign direction (profiler-driven)
+
+The tool layer is being rebuilt for quality against the profiler's **tool-design analysis**
+(`docs/dataset-analysis.md`) and validated against the independent oracle (`docs/golden-answers.md`,
+`scripts/golden_answers.py`). Build against these tables, not against assumptions:
+
+- **One shared plant/inverter resolver** owns name→id (note: `region` is a compass label, resolve
+  on `name`/`location`), replacing the duplicated fuzzy match in `tools/common.filter_plant` and
+  `tools/plants._filter_by_plant`.
+- **Type-B reducers implement the Measure-semantics table** — `daily_yield` = per-inverter daily
+  max; `total_yield` = window diff; `performance_ratio` = mean excluding nulls; power = mean.
+- **Filters use exact stored strings** from the Vocabulary coverage map (`in_progress`, exact
+  `hotspot` vs `multi hotspot`); an unmatched filter returns empty by design, not by bug.
+- **Type-A combines signals** per Cross-table reconciliation (offline inverters often carry no open
+  alert — status fields alone are insufficient).
+- **Refusals follow the Derivable/non-derivable map** (revenue-from-downtime has no kWh bridge).
+
+### Relationship awareness — schema card, not a runtime graph
+
+The agent does **not** traverse a relationship graph at runtime to plan chains.
+The fixed two-level FK tree, the shared name→id resolver, and the
+measure-semantics / vocabulary maps are flattened into a **static schema card**
+in the system prompt; the LLM plans the chain in the existing loop. The card is
+generated from / points at the `dataset-analysis.md` tables (single source of
+truth), never hand-copied. Rationale, rejected runtime-graph-engine alternative,
+and the future-proofing stance: **ADR 0003**.
+
+**Parallelism is implicit in FK depth, not a separate planner.** Siblings under
+one resolved parent (e.g. alerts + weather + inverter-status for a resolved
+plant) are independent and may fan out; a child-of-child query is sequential
+because it needs the parent id first. The loop gets this for free from the card.
+
+### Aggregation surface — reducer is bound to the measure
+
+Do **not** build one tool per math operation (mean/median/sum/rms/…). For
+derived measures the *correct reducer is a property of the column*, fixed by the
+Measure-semantics table — a generic "median of any column" tool would happily
+compute the wrong statistic on `daily_yield`. So derived-metric tools are
+**measure-aware and parameterized** by `(measure, group_by, window)` with the
+reducer pinned per measure; only free spot/category columns get a generic
+stats tool (count, distinct, min/max/p95, mean). This is the concrete shape of
+"aggregation in code" and the direction `derived_metrics` is being rebuilt
+toward.
 
 ## Intent classification
 
@@ -157,5 +201,7 @@ Managed storage behavior:
 ## Graceful degradation
 
 Intent `out_of_scope` flag + synthesis prompt guarded to explicitly refuse when tool results are
-empty/insufficient or required data does not exist (e.g. Q6 revenue-from-downtime). Never fabricate.
+empty/insufficient or required data does not exist (e.g. Q6 revenue-from-downtime). If the tool
+loop exhausts its iteration budget without a final answer, the pipeline returns an explicit
+fallback message instead of a blank response. Never fabricate.
 </content>

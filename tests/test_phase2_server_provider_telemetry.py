@@ -20,6 +20,16 @@ from app.provider_config import export_config_payload, import_config_payload, up
 from app.server import create_app
 
 
+def _copy_dataset(tmp_path: Path, name: str = "dataset") -> Path:
+    target = tmp_path / name
+    shutil.copytree(ROOT_DIR / "input" / "tables-extracted", target)
+    return target
+
+
+def _write_malformed_plants_csv(path: Path) -> None:
+    path.write_text("plant_id\nP1\nP2\nP3\n", encoding="utf-8")
+
+
 def test_secret_store_and_provider_settings_persist(tmp_path):
     settings_path = tmp_path / "common.local.json"
     config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=settings_path)
@@ -248,9 +258,7 @@ def test_server_serves_web_ui_and_assets(tmp_path):
 
 
 def test_dataset_settings_save_reload_reset_are_atomic(tmp_path):
-    default_dir = ROOT_DIR / "input" / "tables-extracted"
-    alt_dir = tmp_path / "alt-dataset"
-    shutil.copytree(default_dir, alt_dir)
+    alt_dir = _copy_dataset(tmp_path, "alt-dataset")
     custom_plants = tmp_path / "plants-custom.csv"
     shutil.copy2(alt_dir / "plants.csv", custom_plants)
 
@@ -297,6 +305,35 @@ def test_dataset_settings_save_reload_reset_are_atomic(tmp_path):
     assert unchanged.csv_dir == alt_dir
     assert unchanged.csv_files == {"plants": str(custom_plants)}
 
+    malformed_plants = tmp_path / "plants-malformed.csv"
+    _write_malformed_plants_csv(malformed_plants)
+    schema_failed = client.put(
+        "/api/settings/dataset",
+        json={
+            "csv_dir": str(alt_dir),
+            "csv_files": {"plants": str(malformed_plants)},
+        },
+    )
+    assert schema_failed.status_code == 400
+    assert "Dataset schema invalid for table 'plants'" in schema_failed.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.csv_dir == alt_dir
+    assert unchanged.csv_files == {"plants": str(custom_plants)}
+
+    _write_malformed_plants_csv(custom_plants)
+    reload_failed = client.post("/api/settings/dataset/reload")
+    assert reload_failed.status_code == 400
+    assert "Dataset schema invalid for table 'plants'" in reload_failed.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.csv_dir == alt_dir
+    assert unchanged.csv_files == {"plants": str(custom_plants)}
+
+    reload_response = client.post("/api/settings/dataset/reload")
+    assert reload_response.status_code == 400
+
+    shutil.copy2(alt_dir / "plants.csv", custom_plants)
     reload_response = client.post("/api/settings/dataset/reload")
     assert reload_response.status_code == 200
     assert reload_response.json()["config"]["csv_dir"] == str(alt_dir)
@@ -340,6 +377,19 @@ def test_dataset_upload_and_zip_import_are_atomic(tmp_path):
 
     reloaded = load_config(config.settings_path)
     assert reloaded.csv_files["plants"].startswith("data/managed_datasets/overrides/plants-")
+
+    malformed_upload = client.post(
+        "/api/settings/dataset/upload/plants",
+        json={
+            "filename": "plants.csv",
+            "content": "plant_id\nP1\nP2\n",
+        },
+    )
+    assert malformed_upload.status_code == 400
+    assert "Dataset schema invalid for table 'plants'" in malformed_upload.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.csv_files["plants"].startswith("data/managed_datasets/overrides/plants-")
 
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
@@ -395,6 +445,34 @@ def test_dataset_upload_and_zip_import_are_atomic(tmp_path):
     )
     assert failed.status_code == 400
     assert "missing required CSVs" in failed.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.csv_dir_setting == imported_config.csv_dir_setting
+    assert unchanged.csv_files == {}
+
+    malformed_archive = io.BytesIO()
+    with zipfile.ZipFile(malformed_archive, "w") as archive:
+        for table_name in (
+            "inverters",
+            "generation_readings",
+            "weather_readings",
+            "alerts",
+            "anomalies",
+            "maintenance",
+        ):
+            archive.write(default_dir / f"{table_name}.csv", arcname=f"{table_name}.csv")
+        archive.writestr("plants.csv", "plant_id\nP1\nP2\n")
+    malformed_archive.seek(0)
+
+    malformed_import = client.post(
+        "/api/settings/dataset/import-zip",
+        json={
+            "filename": "broken-schema.zip",
+            "content_base64": base64.b64encode(malformed_archive.getvalue()).decode("ascii"),
+        },
+    )
+    assert malformed_import.status_code == 400
+    assert "Dataset schema invalid for table 'plants'" in malformed_import.json()["detail"]
 
     unchanged = load_config(config.settings_path)
     assert unchanged.csv_dir_setting == imported_config.csv_dir_setting
@@ -517,6 +595,24 @@ def test_server_config_io_round_trip_and_validation(tmp_path):
     assert body["appearance"]["light_theme"] == "vscode_light"
     assert body["ui"]["default_gating_mode"] == "bind_all"
     assert body["llm_providers"][1]["base_url"] == "http://127.0.0.1:11434"
+
+    malformed_dataset_dir = _copy_dataset(tmp_path, "bad-config-dataset")
+    malformed_plants = tmp_path / "bad-config-plants.csv"
+    shutil.copy2(malformed_dataset_dir / "plants.csv", malformed_plants)
+    _write_malformed_plants_csv(malformed_plants)
+    payload["data"] = {
+        "csv_dir": str(malformed_dataset_dir),
+        "csv_files": {"plants": str(malformed_plants)},
+    }
+
+    rejected_schema = client.put("/api/settings/config", json={"config": payload})
+    assert rejected_schema.status_code == 400
+    assert "Dataset schema invalid for table 'plants'" in rejected_schema.json()["detail"]
+
+    unchanged = load_config(config.settings_path)
+    assert unchanged.appearance["light_theme"] == "vscode_light"
+    assert unchanged.csv_dir_setting == "input/tables-extracted"
+    assert unchanged.csv_files == {}
 
     rejected = client.put("/api/settings/config", json={"config": {"appearance": "bad"}})
     assert rejected.status_code == 400

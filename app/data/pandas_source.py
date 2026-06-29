@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .source import TABLE_NAMES
+from .source import REQUIRED_COLUMNS, TABLE_NAMES
 
 # Columns parsed as datetimes per table, so tools get real timestamps. Only the
 # columns that exist are parsed; missing ones are ignored.
@@ -50,11 +50,20 @@ class PandasDataSource:
             if not csv_path.exists():
                 raise FileNotFoundError(f"Missing dataset CSV: {csv_path}")
             frame = pd.read_csv(csv_path)
+            self._validate_required_columns(name, frame)
             for column in _DATE_COLUMNS.get(name, ()):  # parse known date columns
                 if column in frame.columns:
                     frame[column] = pd.to_datetime(frame[column], errors="coerce")
             self._tables[name] = frame
         self._dataset_today = self._compute_dataset_today()
+
+    def _validate_required_columns(self, table_name: str, frame: pd.DataFrame) -> None:
+        required = REQUIRED_COLUMNS[table_name]
+        missing = [column for column in required if column not in frame.columns]
+        if missing:
+            raise ValueError(
+                f"Dataset schema invalid for table '{table_name}': missing columns: {', '.join(missing)}."
+            )
 
     def _compute_dataset_today(self) -> datetime:
         latest: pd.Timestamp | None = None

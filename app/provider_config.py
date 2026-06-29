@@ -246,13 +246,21 @@ def normalize_imported_config(payload: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def import_config_payload(
+def prepare_import_config_payload(
     config: AppConfig,
     *,
     payload: dict[str, Any],
 ) -> AppConfig:
     normalized = normalize_imported_config(payload)
-    return save_config(AppConfig(raw=normalized, settings_path=config.settings_path))
+    return AppConfig(raw=normalized, settings_path=config.settings_path)
+
+
+def import_config_payload(
+    config: AppConfig,
+    *,
+    payload: dict[str, Any],
+) -> AppConfig:
+    return save_config(prepare_import_config_payload(config, payload=payload))
 
 
 def redact_provider(provider: dict[str, Any], *, has_secret: bool | None = None) -> dict[str, Any]:

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .common import clean, counts, records
+import pandas as pd
+
+from .common import counts, records
 from .registry import ToolContext, ToolRegistry
 
 # Fields surfaced to the model — operational, not every CSV column.
@@ -62,10 +64,6 @@ def _filter_by_plant(frame: pd.DataFrame, plant: str) -> pd.DataFrame:
     by_id = frame["plant_id"].astype(str).str.lower() == needle
     by_name = frame["name"].astype(str).str.lower() == needle
     return frame[by_id | by_name]
-
-
-def _clean(value: Any) -> Any:
-    return clean(value)
 
 
 def register(registry: ToolRegistry) -> None:
