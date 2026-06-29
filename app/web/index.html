@@ -7,80 +7,184 @@
     <link rel="stylesheet" href="/assets/styles.css">
   </head>
   <body>
-    <div class="shell">
-      <aside class="sidebar">
+    <div class="app">
+      <header class="appbar">
         <div class="brand">
-          <div class="brand-mark">SA</div>
           <div>
             <p class="eyebrow">Solar AI Assistant</p>
             <h1>Operations Console</h1>
           </div>
         </div>
 
-        <div class="sidebar-actions">
-          <button id="new-session-button" class="button button-primary" type="button">New Chat</button>
-        </div>
+        <div class="appbar-side">
+          <nav class="appnav" role="tablist" aria-label="Primary">
+            <button id="tab-chat" class="navlink is-active" type="button" data-view="chat">AI Chat</button>
+            <button id="tab-settings" class="navlink" type="button" data-view="settings">Settings</button>
+          </nav>
 
-        <div class="sidebar-section">
-          <div class="section-head">
-            <h2>Sessions</h2>
-            <span id="dataset-today" class="pill">Loading</span>
-          </div>
-          <div id="sessions-list" class="session-list"></div>
-        </div>
-      </aside>
-
-      <main class="workspace">
-        <header class="topbar">
-          <div class="view-tabs" role="tablist" aria-label="Workspace view">
-            <button id="tab-chat" class="tab is-active" type="button" data-view="chat">Chat</button>
-            <button id="tab-settings" class="tab" type="button" data-view="settings">Settings</button>
-          </div>
           <div id="status-banner" class="status-banner">Connecting</div>
-        </header>
+        </div>
+      </header>
 
+      <main class="page">
         <section id="view-chat" class="view is-active">
-          <div class="chat-header panel">
-            <div>
-              <p class="eyebrow">Live Controls</p>
-              <h2>Ask the dataset</h2>
-            </div>
-            <div class="control-row">
-              <label class="field compact">
-                <span>Provider</span>
-                <select id="provider-select"></select>
-              </label>
-              <label class="field compact">
-                <span>Tool Gating</span>
-                <select id="gating-select">
-                  <option value="gated">gated</option>
-                  <option value="bind_all">bind_all</option>
-                </select>
-              </label>
-            </div>
-          </div>
+          <section class="chat-hero panel">
+            <p class="eyebrow">AI Chat</p>
+            <h2>AI Chat</h2>
+            <p>
+              Use AI Chat to inspect rover state, review recent activity, and ask grounded questions against this GCS
+              instance. Sessions keep your conversation history while responses include the runtime metadata captured for
+              each turn.
+            </p>
+          </section>
 
-          <div id="messages" class="messages panel"></div>
+          <section id="chat-workspace" class="chat-workspace">
+            <aside id="sessions-pane" class="sessions-pane panel">
+              <div class="sessions-pane-head">
+                <p class="eyebrow">Sessions</p>
+                <h3>Chats</h3>
+              </div>
 
-          <form id="composer-form" class="composer panel">
-            <label class="field grow">
-              <span>Question</span>
-              <textarea id="question-input" rows="3" placeholder="Which plants are offline today?"></textarea>
-            </label>
-            <div class="composer-actions">
-              <div id="trace-visibility-note" class="hint"></div>
-              <button id="send-button" class="button button-primary" type="submit">Send</button>
-            </div>
-          </form>
+              <div class="sessions-toolbar">
+                <div class="session-filter-tabs" role="tablist" aria-label="Session filters">
+                  <button id="session-filter-active" class="session-filter is-active" type="button" data-session-filter="active">Active</button>
+                  <button id="session-filter-archived" class="session-filter" type="button" data-session-filter="archived">Archived</button>
+                  <button id="new-session-button" class="session-filter session-filter-add" type="button" aria-label="Create new chat">+</button>
+                </div>
+                <label class="session-search-wrap" aria-label="Search sessions">
+                  <input id="session-search" type="search" placeholder="Search sessions">
+                </label>
+              </div>
+
+              <div class="sessions-meta-row">
+                <p id="session-count" class="panel-note">0 chats</p>
+                <span id="dataset-today" class="pill">Loading</span>
+              </div>
+
+              <div id="sessions-list" class="session-list"></div>
+            </aside>
+
+            <div id="sidebar-resizer" class="pane-resizer pane-resizer-vertical" role="separator" aria-orientation="vertical" aria-label="Resize sessions sidebar" tabindex="0"></div>
+
+            <section class="chat-shell panel">
+              <div class="chat-shell-head">
+                <div class="chat-shell-head-copy">
+                  <p class="eyebrow">General Chat</p>
+                  <h2 id="chat-title">New chat</h2>
+                </div>
+
+                <div class="chat-shell-topbar">
+                  <label class="provider-picker field">
+                    <span class="sr-only">Provider</span>
+                    <select id="provider-select"></select>
+                  </label>
+                  <div class="chat-head-actions" aria-label="Session actions">
+                    <button id="rename-session-button" class="icon-button" type="button" title="Rename session" aria-label="Rename session">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10.5-10.5-4-4L4 16v4Zm3-1.5H5.5V17l9-9 1.5 1.5-9 9ZM17 7l-1.5-1.5 1-1a1.06 1.06 0 0 1 1.5 0l1 1a1.06 1.06 0 0 1 0 1.5L18 8Z"/></svg>
+                    </button>
+                    <button id="delete-session-button" class="icon-button" type="button" title="Delete session" aria-label="Delete session">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7Zm10-12H7v10h10V9ZM15 4V3H9v1H4v2h16V4h-5Z"/></svg>
+                    </button>
+                    <button id="copy-session-button" class="icon-button" type="button" title="Copy transcript" aria-label="Copy transcript">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1Zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H10V7h9v14Z"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="chat-shell-status">
+                <span id="chat-provider-summary" class="status-chip">Chat model pending.</span>
+                <span id="chat-gating-summary" class="status-chip status-chip-ready">Ready.</span>
+                <span id="active-session-meta" class="status-chip">No active chat yet.</span>
+              </div>
+
+              <div id="messages" class="messages"></div>
+
+              <div id="composer-resizer" class="pane-resizer pane-resizer-horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize chat input area" tabindex="0"></div>
+
+              <form id="composer-form" class="composer">
+                <label class="field composer-field">
+                  <span class="sr-only">Question</span>
+                  <textarea id="question-input" rows="4" placeholder="Ask about the rover mission"></textarea>
+                  <div id="command-menu" class="command-menu" hidden aria-label="Slash commands"></div>
+                </label>
+                <div class="composer-foot">
+                  <div class="composer-left">
+                    <button id="sources-button" class="button button-quiet" type="button">Sources <span id="sources-count">0/0</span></button>
+                    <span id="trace-visibility-note" class="hint">Ready.</span>
+                  </div>
+                  <div class="composer-actions">
+                    <button id="retry-button" class="button" type="button">Retry response</button>
+                    <button id="stop-button" class="button" type="button">Stop</button>
+                    <button id="send-button" class="button button-primary" type="submit">Send</button>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <div id="workspace-bottom-resizer" class="pane-resizer pane-resizer-horizontal" role="separator" aria-orientation="horizontal" aria-label="Resize chat workspace height" tabindex="0"></div>
+
+          </section>
         </section>
 
         <section id="view-settings" class="view">
-          <div class="settings-grid">
-            <section class="panel settings-panel">
+          <nav class="settings-tabbar" role="tablist" aria-label="Settings sections">
+            <button class="subtab is-active" type="button" data-subtab="appearance">Appearance</button>
+            <button class="subtab" type="button" data-subtab="ai">AI Settings</button>
+            <button class="subtab" type="button" data-subtab="providers">Add LLM Provider</button>
+            <button class="subtab" type="button" data-subtab="rag">RAG</button>
+            <button class="subtab" type="button" data-subtab="dataset">Dataset</button>
+            <button class="subtab" type="button" data-subtab="config-io">Config I/O</button>
+          </nav>
+
+          <div class="settings-content">
+
+            <section id="subtab-appearance" class="subview is-active">
+              <form id="appearance-form" class="appearance-reference-card">
+                <div class="appearance-heading">
+                  <div>
+                    <p class="eyebrow">Theme</p>
+                    <h2>Appearance</h2>
+                  </div>
+                  <span class="appearance-badge">Local preference</span>
+                </div>
+                <label class="field appearance-field">
+                  <span>Theme mode</span>
+                  <select id="appearance-theme-mode">
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
+                    <option value="system">System</option>
+                  </select>
+                </label>
+                <label class="field appearance-field">
+                  <span>Default light theme</span>
+                  <select id="appearance-light-theme">
+                    <option value="vscode_light">VS Code Light</option>
+                    <option value="quiet_light">Quiet Light</option>
+                    <option value="cool_light">Cool Light</option>
+                    <option value="sandstone_light">Sandstone Light</option>
+                  </select>
+                </label>
+                <label class="field appearance-field">
+                  <span>Default dark theme</span>
+                  <select id="appearance-dark-theme">
+                    <option value="vscode_dark">VS Code Dark</option>
+                    <option value="graphite_dark">Graphite Dark</option>
+                    <option value="midnight_dark">Midnight Dark</option>
+                    <option value="amber_dark">Amber Dark</option>
+                  </select>
+                </label>
+                <p class="panel-note">Theme mode follows the browser and OS when set to system. Light and dark defaults are stored separately.</p>
+                <p class="panel-note">Theme preferences are stored in this browser.</p>
+              </form>
+            </section>
+
+            <section id="subtab-ai" class="subview">
               <div class="section-head">
                 <div>
                   <p class="eyebrow">App Defaults</p>
-                  <h2>Behavior</h2>
+                  <h2>AI Settings</h2>
+                  <p class="panel-note">These defaults apply to the next chat unless you override them on the chat page.</p>
                 </div>
               </div>
               <form id="ui-settings-form">
@@ -93,7 +197,7 @@
                 </div>
                 <label class="checkbox-row">
                   <input id="settings-verbose-trace" type="checkbox">
-                  <span>Show detailed agent trace on assistant messages</span>
+                  <span>Show detailed trace on assistant messages</span>
                 </label>
                 <div class="settings-actions">
                   <button class="button button-primary" type="submit">Save Defaults</button>
@@ -101,49 +205,329 @@
               </form>
             </section>
 
-            <section class="panel settings-panel settings-panel-wide">
-              <div class="section-head">
-                <div>
-                  <p class="eyebrow">LLM Providers</p>
-                  <h2>Routing and credentials</h2>
-                </div>
-                <button id="add-provider-button" class="button" type="button">Add Provider</button>
-              </div>
-
+            <section id="subtab-providers" class="subview">
               <form id="providers-form">
-                <div class="routing-grid">
-                  <div class="routing-card">
-                    <h3>Intent routing</h3>
-                    <label class="field">
-                      <span>Primary provider</span>
-                      <select id="intent-primary"></select>
-                    </label>
-                    <label class="field">
-                      <span>Fallback providers</span>
-                      <input id="intent-fallbacks" type="text" placeholder="comma,separated,ids">
-                    </label>
-                  </div>
-                  <div class="routing-card">
-                    <h3>Synthesis routing</h3>
-                    <label class="field">
-                      <span>Primary provider</span>
-                      <select id="synthesis-primary"></select>
-                    </label>
-                    <label class="field">
-                      <span>Fallback providers</span>
-                      <input id="synthesis-fallbacks" type="text" placeholder="comma,separated,ids">
-                    </label>
-                  </div>
-                </div>
+                <div class="provider-col">
+                  <article class="routing-card provider-settings-card">
+                    <div class="provider-panel-head">
+                      <div>
+                        <p class="eyebrow">Add or edit</p>
+                        <h2>Provider Settings</h2>
+                      </div>
+                      <span id="provider-form-mode-pill" class="panel-pill panel-pill-warn">New provider</span>
+                    </div>
+                    <p class="panel-note">Templates pre-fill common defaults only. Save Provider creates or updates a configured provider.</p>
 
-                <div id="providers-list" class="provider-list"></div>
+                    <div class="provider-template-row">
+                      <label class="field grow">
+                        <span>Provider template</span>
+                        <select id="provider-template-select"></select>
+                      </label>
+                      <button id="provider-apply-template" class="button" type="button">Apply Template</button>
+                    </div>
 
-                <div class="settings-actions">
-                  <button class="button button-primary" type="submit">Save Providers</button>
+                    <div id="provider-editor">
+                      <div class="provider-form-grid">
+                        <label class="field">
+                          <span>Display Name</span>
+                          <input id="provider-display-name" type="text">
+                        </label>
+                        <label class="field">
+                          <span>Provider Type</span>
+                          <select id="provider-type"></select>
+                        </label>
+                        <label class="field">
+                          <span>Auth Mode</span>
+                          <select id="provider-auth-mode"></select>
+                        </label>
+                        <label class="field">
+                          <span id="provider-secret-ref-label">Secret / Env Var</span>
+                          <input id="provider-secret-ref" type="text">
+                        </label>
+                        <label id="provider-secret-value-row" class="field">
+                          <span>API Key Value</span>
+                          <input id="provider-secret-value" type="password" autocomplete="off" placeholder="Paste API key">
+                        </label>
+                        <label class="field">
+                          <span>Base URL</span>
+                          <input id="provider-base-url" type="url">
+                        </label>
+                        <label class="field">
+                          <span>Model ID</span>
+                          <input id="provider-model-id" type="text">
+                        </label>
+                        <label class="field">
+                          <span>Context Window</span>
+                          <input id="provider-context-window" type="number" min="0" step="1" placeholder="e.g. 131072">
+                        </label>
+                        <label class="field">
+                          <span>Capabilities</span>
+                          <input id="provider-capabilities" type="text" placeholder="chat, reasoning">
+                        </label>
+                        <label class="checkbox-row provider-enabled-row">
+                          <input id="provider-enabled" type="checkbox">
+                          <span>Enabled</span>
+                        </label>
+                      </div>
+
+                      <div class="provider-actions">
+                        <button id="provider-save-draft" class="button button-primary" type="button">Save Provider</button>
+                        <button id="provider-check-draft" class="button" type="button">Check Draft</button>
+                        <button id="provider-new" class="button" type="button">New Provider</button>
+                        <button id="provider-cancel-edit" class="button" type="button">Cancel Edit</button>
+                      </div>
+
+                      <p id="provider-form-status" class="panel-note">Loaded provider settings.</p>
+                    </div>
+                  </article>
+
+                  <article id="providers-registry-card" class="routing-card provider-settings-card">
+                    <div class="provider-panel-head">
+                      <div>
+                        <p class="eyebrow">Registry</p>
+                        <h2>Configured LLMs</h2>
+                      </div>
+                      <span id="providers-registry-pill" class="panel-pill">Loading</span>
+                    </div>
+                    <p class="panel-note">Check verifies local draft completeness plus auth references. It does not run chat prompts or intent parsing. The default marker here controls the chat route primary.</p>
+                    <div class="provider-toolbar-actions">
+                      <button id="provider-add-examples" class="button" type="button">Add Missing Example Providers</button>
+                    </div>
+                    <div id="providers-registry" class="provider-registry-list"></div>
+                  </article>
+
+                  <article class="routing-card provider-settings-card">
+                    <div class="provider-panel-head">
+                      <div>
+                        <p class="eyebrow">Routing</p>
+                        <h2>Model Routing Rules</h2>
+                      </div>
+                      <span class="panel-pill">Primary + fallback</span>
+                    </div>
+                    <p class="panel-note">Each task type gets a primary provider and ordered fallbacks. Runtime selection can skip unavailable providers.</p>
+                    <div class="provider-routing-grid">
+                      <div class="provider-routing-row">
+                        <h3>Intent</h3>
+                        <label class="field">
+                          <span>Primary provider</span>
+                          <select id="intent-primary"></select>
+                        </label>
+                        <label class="field">
+                          <span>Fallback providers</span>
+                          <input id="intent-fallbacks" type="text" placeholder="comma,separated,ids">
+                        </label>
+                      </div>
+                      <div class="provider-routing-row">
+                        <h3>Synthesis</h3>
+                        <label class="field">
+                          <span>Primary provider</span>
+                          <select id="synthesis-primary"></select>
+                        </label>
+                        <label class="field">
+                          <span>Fallback providers</span>
+                          <input id="synthesis-fallbacks" type="text" placeholder="comma,separated,ids">
+                        </label>
+                      </div>
+                    </div>
+                    <div class="settings-actions">
+                      <button class="button button-primary" type="submit">Save Providers & Routing</button>
+                    </div>
+                  </article>
                 </div>
               </form>
             </section>
-          </div>
+
+            <section id="subtab-rag" class="subview">
+              <div class="placeholder-panel">
+                <p class="eyebrow">Retrieval</p>
+                <h2>RAG</h2>
+                <p class="panel-note">No retrieval backend is wired up in this build. This section mirrors the reference information architecture and is intentionally a placeholder.</p>
+              </div>
+            </section>
+
+            <section id="subtab-dataset" class="subview">
+              <form id="dataset-settings-form" class="routing-card dataset-settings-card">
+                <div class="section-head">
+                  <div>
+                    <p class="eyebrow">Active Dataset</p>
+                    <h2>Dataset</h2>
+                    <p class="panel-note">Server-side paths only. Save validates all 7 CSVs before the live pipeline switches over.</p>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>Base CSV directory</span>
+                  <input id="dataset-csv-dir" type="text" placeholder="input/tables-extracted">
+                </label>
+
+                <div class="dataset-grid">
+                  <label class="field">
+                    <span>plants.csv override</span>
+                    <input id="dataset-file-plants" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>inverters.csv override</span>
+                    <input id="dataset-file-inverters" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>generation_readings.csv override</span>
+                    <input id="dataset-file-generation_readings" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>weather_readings.csv override</span>
+                    <input id="dataset-file-weather_readings" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>alerts.csv override</span>
+                    <input id="dataset-file-alerts" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>anomalies.csv override</span>
+                    <input id="dataset-file-anomalies" type="text" placeholder="Optional override path">
+                  </label>
+                  <label class="field">
+                    <span>maintenance.csv override</span>
+                    <input id="dataset-file-maintenance" type="text" placeholder="Optional override path">
+                  </label>
+                </div>
+
+                <div class="settings-actions">
+                  <button class="button button-primary" type="submit">Save Paths</button>
+                  <button id="dataset-reload-current" class="button" type="button">Reload Current Dataset</button>
+                  <button id="dataset-reset-defaults" class="button" type="button">Reset to Defaults</button>
+                </div>
+
+                <div class="dataset-grid">
+                  <label class="field">
+                    <span>Bulk dataset zip</span>
+                    <input id="dataset-import-zip" type="file" accept=".zip,application/zip">
+                  </label>
+                  <div class="field field-actions">
+                    <span>Bulk import activation</span>
+                    <button id="dataset-import-zip-button" class="button" type="button">Import Zip Dataset</button>
+                  </div>
+                </div>
+
+                <div class="dataset-resolved-table-list">
+                  <article class="dataset-table-card">
+                    <div class="dataset-table-card-top">
+                      <strong>Managed per-table uploads</strong>
+                      <span class="panel-pill panel-pill-info">CSV</span>
+                    </div>
+                    <div class="dataset-grid">
+                      <label class="field">
+                        <span>plants.csv upload</span>
+                        <input id="dataset-upload-plants" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate plants.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="plants">Upload plants.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>inverters.csv upload</span>
+                        <input id="dataset-upload-inverters" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate inverters.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="inverters">Upload inverters.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>generation_readings.csv upload</span>
+                        <input id="dataset-upload-generation_readings" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate generation_readings.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="generation_readings">Upload generation_readings.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>weather_readings.csv upload</span>
+                        <input id="dataset-upload-weather_readings" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate weather_readings.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="weather_readings">Upload weather_readings.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>alerts.csv upload</span>
+                        <input id="dataset-upload-alerts" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate alerts.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="alerts">Upload alerts.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>anomalies.csv upload</span>
+                        <input id="dataset-upload-anomalies" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate anomalies.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="anomalies">Upload anomalies.csv</button>
+                      </div>
+                      <label class="field">
+                        <span>maintenance.csv upload</span>
+                        <input id="dataset-upload-maintenance" type="file" accept=".csv,text/csv">
+                      </label>
+                      <div class="field field-actions">
+                        <span>Activate maintenance.csv</span>
+                        <button class="button" type="button" data-dataset-upload-table="maintenance">Upload maintenance.csv</button>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="dataset-status-shell">
+                  <div class="dataset-status-meta">
+                    <span class="panel-pill panel-pill-info">dataset today</span>
+                    <code id="dataset-status-today">Unknown</code>
+                  </div>
+                  <div class="dataset-status-meta">
+                    <span class="panel-pill">resolved base dir</span>
+                    <code id="dataset-status-dir">Unknown</code>
+                  </div>
+                </div>
+
+                <p id="dataset-settings-feedback" class="panel-note">Loaded dataset settings.</p>
+                <div id="dataset-resolved-table-list" class="dataset-resolved-table-list"></div>
+              </form>
+            </section>
+
+            <section id="subtab-config-io" class="subview">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Import / Export</p>
+                  <h2>Config I/O</h2>
+                  <p class="panel-note">Export and import the JSON config only. Secrets remain outside the payload in the SQLite secret store or env vars.</p>
+                </div>
+              </div>
+              <div class="config-io-grid">
+                <section class="routing-card">
+                  <h3>Export current config</h3>
+                  <p class="panel-note">Downloads the current JSON settings snapshot without secret values.</p>
+                  <div class="settings-actions">
+                    <button id="config-export-button" class="button button-primary" type="button">Download Config</button>
+                    <button id="config-load-current" class="button" type="button">Load Current Into Editor</button>
+                  </div>
+                </section>
+
+                <form id="config-import-form" class="routing-card">
+                  <h3>Import config JSON</h3>
+                  <label class="field">
+                    <span>Choose file</span>
+                    <input id="config-import-file" type="file" accept=".json,application/json">
+                  </label>
+                  <label class="field">
+                    <span>Config payload</span>
+                    <textarea id="config-import-text" rows="14" placeholder='{"llm_providers":[...],"model_routing":{...}}'></textarea>
+                  </label>
+                  <p id="config-import-feedback" class="panel-note">Validation errors will appear here before or after import.</p>
+                  <div class="settings-actions">
+                    <button class="button button-primary" type="submit">Import Config</button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+          </div><!-- .settings-content -->
         </section>
       </main>
     </div>
@@ -153,6 +537,11 @@
         <p class="eyebrow">Ready</p>
         <h3>No messages yet</h3>
         <p>Start a new chat and ask about plants, inverters, generation, alerts, anomalies, or maintenance.</p>
+        <div class="prompt-chip-row">
+          <button class="prompt-chip" type="button" data-prompt="Which plants are offline today?">Offline plants</button>
+          <button class="prompt-chip" type="button" data-prompt="Show recent inverter anomalies for today.">Inverter anomalies</button>
+          <button class="prompt-chip" type="button" data-prompt="What maintenance work is scheduled this week?">Maintenance this week</button>
+        </div>
       </div>
     </template>
 

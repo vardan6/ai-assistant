@@ -39,7 +39,7 @@ API (shared token/timing footer format). One pipeline, two front-ends.
 ```
 question → [smalltalk fast-path?] → IntentClassifier (A/B/C + entities + out_of_scope)
         → tool gating (gated subset | bind_all)  → agent loop (iterative tool calls)
-        → tools (pandas aggregation, structured dicts) → synthesis (refusal-guarded)
+        → tools (pandas aggregation, structured dicts) → synthesis (explicit degradation)
         → answer + telemetry (intent, tool steps streamed, tokens/time footer)
 ```
 
@@ -56,6 +56,50 @@ performance_ratio, mttr) under a uniform registration pattern. Tools accept name
 loop can resolve `plant_id`/`inverter_id` then filter (the 2-step chain). Type B intent gating may
 bind the raw reading summaries and the derived metric tools together so the loop can choose the
 smallest sufficient tool for the question.
+
+### Tool redesign direction (profiler-driven)
+
+The tool layer is being rebuilt for quality against the profiler's **tool-design analysis**
+(`docs/dataset-analysis.md`) and validated against the independent oracle (`docs/golden-answers.md`,
+`scripts/golden_answers.py`). Build against these tables, not against assumptions:
+
+- **One shared plant/inverter resolver** owns name→id (note: `region` is a compass label, resolve
+  on `name`/`location`), replacing the duplicated fuzzy match in `tools/common.filter_plant` and
+  `tools/plants._filter_by_plant`.
+- **Type-B reducers implement the Measure-semantics table** — `daily_yield` = per-inverter daily
+  max; `total_yield` = window diff; `performance_ratio` = mean excluding nulls; power = mean.
+- **Filters use exact stored strings** from the Vocabulary coverage map (`in_progress`, exact
+  `hotspot` vs `multi hotspot`); an unmatched filter returns empty by design, not by bug.
+- **Type-A combines signals** per Cross-table reconciliation (offline inverters often carry no open
+  alert — status fields alone are insufficient).
+- **Refusals follow the Derivable/non-derivable map** (revenue-from-downtime has no kWh bridge).
+
+### Relationship awareness — schema card, not a runtime graph
+
+The agent does **not** traverse a relationship graph at runtime to plan chains.
+The fixed two-level FK tree, the shared name→id resolver, and the
+measure-semantics / vocabulary maps are flattened into a **static schema card**
+in the system prompt; the LLM plans the chain in the existing loop. The card is
+generated from / points at the `dataset-analysis.md` tables (single source of
+truth), never hand-copied. Rationale, rejected runtime-graph-engine alternative,
+and the future-proofing stance: **ADR 0003**.
+
+**Parallelism is implicit in FK depth, not a separate planner.** Siblings under
+one resolved parent (e.g. alerts + weather + inverter-status for a resolved
+plant) are independent and may fan out; a child-of-child query is sequential
+because it needs the parent id first. The loop gets this for free from the card.
+
+### Aggregation surface — reducer is bound to the measure
+
+Do **not** build one tool per math operation (mean/median/sum/rms/…). For
+derived measures the *correct reducer is a property of the column*, fixed by the
+Measure-semantics table — a generic "median of any column" tool would happily
+compute the wrong statistic on `daily_yield`. So derived-metric tools are
+**measure-aware and parameterized** by `(measure, group_by, window)` with the
+reducer pinned per measure; only free spot/category columns get a generic
+stats tool (count, distinct, min/max/p95, mean). This is the concrete shape of
+"aggregation in code" and the direction `derived_metrics` is being rebuilt
+toward.
 
 ## Intent classification
 
@@ -98,12 +142,66 @@ to keep early-iteration context small.
 - Backend: `stream_tool_events` + `agent_traces` + `usage_telemetry` → live agent-step trace
   (which tool, gradually) and per-message footer (tokens in/out/total, time elapsed, tok/s, model,
   timestamp). Verbose-trace toggle in Settings.
-- Web UI: sessions **sidebar** + chat area + message cards, adopting reference theme tokens.
-  Settings: **LLM Providers tab now**; Appearance/theme tab later.
+- Web UI: keep the frontend **vanilla** (`index.html` + `app.js` + `styles.css`), no framework
+  rewrite. Reuse the reference app's visual structure and interactions, not its rover-specific data
+  or React-era assumptions.
+- App shell: shared **top navigation** with page-like `AI Chat` and `Settings` views. We may show
+  non-functional reference nav items as placeholders for visual parity, but only `AI Chat` and
+  `Settings` are live destinations in this repo.
+- AI Chat: present the conversation as a dedicated page with a header block, sessions rail/list,
+  provider/model controls, message cards, and composer matching the reference layout style. Reuse
+  the current session/chat APIs and message data; do not seed fake conversations.
+- Settings: present as a dedicated page with sub-tabs for `Appearance`, `AI Settings`,
+  `LLM Providers`, `RAG`, and `Config I/O`.
+- Appearance tab: fully own **theme settings** for the web UI (color/accent/surface choices)
+  through persisted UI config and CSS custom properties.
+- AI Settings tab: hold current assistant behavior defaults such as tool gating and verbose trace.
+- LLM Providers tab: keep the existing provider/config backend, but move to a reference-style
+  provider-management flow with template selection, add/edit/save actions, enable toggle, and a
+  configured-provider registry/list.
+- RAG tab: explicit placeholder only. No retrieval backend is introduced unless product scope
+  changes; this keeps the current non-goal intact while matching the reference information
+  architecture.
+- Config I/O tab: import/export the **JSON config file only**. Secrets stay outside exported config
+  and continue to live in env vars or the SQLite `SecretStore`.
+- Dataset tab: expose the active dataset config/status through dedicated API endpoints backed by
+  the same shared JSON config file. The tab owns `csv_dir`, optional per-table overrides, active
+  dataset summary, resolved file paths, reload/reset actions, and dataset validation feedback.
+- Dataset uploads: support per-table CSV upload and bulk `.zip` import. Uploads copy files into
+  managed server-side storage under canonical table names, then update the same dataset config
+  paths used by manual path editing.
 - CLI: thin client mirroring the same footer.
+
+## Dataset settings and reload model
+
+Keep the loader contract simple: resolve one final file path per canonical table before
+constructing `PandasDataSource`. Centralize that resolution in backend config/helpers rather than
+teaching the loader or frontend about multiple path rules.
+
+Runtime behavior:
+
+- Dedicated dataset endpoints may provide richer validation/reload behavior than generic Config I/O,
+  but both persist into the same JSON config file.
+- `Save Paths` validates all 7 resolved CSVs, then rebuilds the live `Pipeline` in-process on
+  success; failure leaves both runtime and persisted config unchanged.
+- `Reload Current Dataset` revalidates/rebuilds from the currently persisted dataset config only.
+- `Reset to Defaults` restores the built-in repo dataset config, validates it, then reloads.
+- Live dataset swaps affect new requests only; in-flight requests finish on the pipeline instance
+  they started with.
+
+Managed storage behavior:
+
+- Per-table uploads stage the file, validate the full resolved dataset with that candidate, then
+  replace the managed file and persist that table's override path on success.
+- Bulk `.zip` import is atomic: extract to staging, require all 7 canonical CSVs exactly once
+  (case-insensitive basename match; ignore extras), then activate by swapping to a managed dataset
+  directory, updating `csv_dir`, and clearing per-table overrides.
+- Managed upload/import paths should be stored as project-relative config paths when practical.
 
 ## Graceful degradation
 
 Intent `out_of_scope` flag + synthesis prompt guarded to explicitly refuse when tool results are
-empty/insufficient or required data does not exist (e.g. Q6 revenue-from-downtime). Never fabricate.
+empty/insufficient or required data does not exist (e.g. Q6 revenue-from-downtime). If the tool
+loop exhausts its iteration budget without a final answer, the pipeline returns an explicit
+fallback message instead of a blank response. Never fabricate.
 </content>

@@ -45,5 +45,10 @@
   "ui": {
     "default_gating_mode": "gated",
     "verbose_trace": true
+  },
+  "appearance": {
+    "theme_mode": "light",
+    "light_theme": "quiet_light",
+    "dark_theme": "vscode_dark"
   }
 }

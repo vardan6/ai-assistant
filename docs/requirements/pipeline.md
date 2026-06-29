@@ -35,6 +35,35 @@ choices must stay clean and unsurprising in a walkthrough.
 5. **Graceful degradation** — on ambiguous or unanswerable questions, say so clearly; never
    hallucinate a number. (Demo Q6 "revenue lost from downtime" is intentionally unanswerable.)
 
+## Coverage principle — the spec is a floor, not a ceiling
+
+The task's three intent types (A/B/C) and its suggested questions are the
+**minimum** the assistant must satisfy, not the boundary of the design. A more
+universal, reliable mechanism that subsumes a narrow spec ask is **preferred and
+counts as satisfied** — we are not constrained to mirror the A/B/C shape if our
+agent loop already covers those cases more generally and more dependably.
+
+The obligation is asymmetric:
+
+- Every concrete phrase/question/requirement in `solar_interview_task.md` **must
+  be covered** — verified to produce a correct result, or to refuse correctly.
+- *How* it is covered may be broader than the spec. If a wider implementation
+  serves a narrow requirement, that requirement is **met by superset** — treated
+  as done/better, not as a gap.
+- If our behavior deviates from the literal spec wording, the deviation must be
+  **justified as an improvement** (more universal, more reliable, broader
+  coverage) — never as a shortfall.
+
+This drives the status vocabulary the test plan uses to report each spec item:
+
+| Status | Meaning |
+|--------|---------|
+| ✅ **Covered** | Works exactly as the spec asks; verified against the oracle. |
+| ➕ **Met by superset** | A broader/more universal mechanism satisfies the narrow ask; verified. Counted as done/better. |
+| 🟡 **Working** | Implemented but not yet verified end-to-end (e.g. awaiting a CLI run). |
+| 🔧 **Needs work** | Known gap, defect, or unverified-and-suspect. |
+| ⛔ **Refuse (by design)** | Spec item is intentionally unanswerable; correct behavior is a clean refusal. |
+
 ## Acceptance criteria
 
 - Intent classification is logged/shown per question.
@@ -49,6 +78,27 @@ choices must stay clean and unsurprising in a walkthrough.
   timestamp** (~2026-06-22), NOT wall-clock time. The CSVs are the full dataset.
 - Agent operates in a single mode (**agent mode only**; no separate chat mode).
 - Greetings/smalltalk short-circuit before the LLM/tools (fast-path).
+
+## Dataset configuration behavior
+
+- The app exposes dataset selection in Settings through the same shared JSON config used by
+  Config I/O.
+- Dataset configuration uses a base directory (`data.csv_dir`) plus optional per-table file
+  overrides (`data.csv_files`) for the 7 canonical CSVs. A blank override means
+  `<csv_dir>/<canonical_name>.csv`.
+- The Settings UI must show backend/server paths, not browser-local paths, and must show the
+  effective resolved path for each canonical table.
+- Dataset changes apply only on explicit actions (`Save Paths`, `Reload Current Dataset`,
+  `Reset to Defaults`, per-table upload, bulk zip import), never on field edit.
+- Saving or upload/import activation must validate the full resolved 7-file dataset before the
+  runtime switches over. On failure, the current active dataset remains in use and the persisted
+  config remains unchanged.
+- The app manages exactly one active dataset configuration at a time.
+- Uploads are optional convenience flows layered onto the same config model:
+  per-table CSV upload and bulk `.zip` import. Uploaded files become managed backend files whose
+  stored paths are written back into dataset config.
+- Config export/import includes dataset settings as paths/config only; it does not embed dataset
+  file contents.
 
 ## Non-goals
 

@@ -1,4 +1,4 @@
 from .pandas_source import PandasDataSource
-from .source import TABLE_NAMES, DataSource
+from .source import REQUIRED_COLUMNS, TABLE_NAMES, DataSource
 
-__all__ = ["DataSource", "PandasDataSource", "TABLE_NAMES"]
+__all__ = ["DataSource", "PandasDataSource", "REQUIRED_COLUMNS", "TABLE_NAMES"]

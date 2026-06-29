@@ -1,12 +1,18 @@
 """FastAPI server on :9006; CLI and UI should consume this API."""
 from __future__ import annotations
 
+import base64
+import copy
 import json
 import queue
+import shutil
+import tempfile
 import threading
+import zipfile
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -16,11 +22,23 @@ from pydantic import BaseModel, Field
 from .ai import SecretStore, TraceEvent
 from .ai.provider_registry import evict_model_cache
 from .ai.session_store import SessionStore
-from .config import AppConfig, load_config
+from .chat_commands import CommandContext, build_command_registry
+from .config import AppConfig, DEFAULT_SETTINGS, ROOT_DIR, load_config, save_config
+from .data.source import TABLE_NAMES
 from .pipeline import Pipeline, PipelineAnswer
-from .provider_config import redact_provider, update_provider_settings, update_ui_settings
+from .provider_config import (
+    export_config_payload,
+    normalize_data_settings,
+    prepare_import_config_payload,
+    prepare_dataset_settings,
+    redact_provider,
+    update_appearance_settings,
+    update_provider_settings,
+    update_ui_settings,
+)
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+MANAGED_DATASET_ROOT = ROOT_DIR / "data" / "managed_datasets"
 
 
 class ChatRequest(BaseModel):
@@ -31,6 +49,10 @@ class ChatRequest(BaseModel):
 
 
 class SessionCreateRequest(BaseModel):
+    title: str = "New chat"
+
+
+class SessionUpdateRequest(BaseModel):
     title: str = "New chat"
 
 
@@ -48,6 +70,53 @@ class UISettingsRequest(BaseModel):
     verbose_trace: bool = True
 
 
+class AppearanceSettingsRequest(BaseModel):
+    theme_mode: str = "light"
+    light_theme: str = "quiet_light"
+    dark_theme: str = "vscode_dark"
+
+
+class ConfigImportRequest(BaseModel):
+    config: dict[str, Any]
+
+
+class DatasetSettingsRequest(BaseModel):
+    csv_dir: str = "input/tables-extracted"
+    csv_files: dict[str, str] = Field(default_factory=dict)
+
+
+class DatasetTableUploadRequest(BaseModel):
+    filename: str = ""
+    content: str = ""
+
+
+class DatasetZipImportRequest(BaseModel):
+    filename: str = ""
+    content_base64: str = ""
+
+
+class CommandExecuteRequest(BaseModel):
+    command: str
+    session_id: str = ""
+
+
+def _config_path_for_storage(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT_DIR).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _dataset_settings_payload(config: AppConfig) -> dict[str, Any]:
+    return {
+        "csv_dir": config.csv_dir_setting,
+        "csv_files": {
+            table_name: config.csv_files.get(table_name, "")
+            for table_name in TABLE_NAMES
+        },
+    }
+
+
 def create_app(
     config: AppConfig | None = None,
     *,
@@ -61,6 +130,7 @@ def create_app(
     secrets = secret_store or SecretStore(cfg.llm_secrets_db_path)
     sessions = session_store or SessionStore(cfg.ai_sessions_db_path)
     live_pipeline = pipeline or Pipeline(cfg, secret_resolver=secrets.get)
+    command_registry = build_command_registry()
 
     def serialize_answer(result: PipelineAnswer) -> dict[str, Any]:
         return {
@@ -73,9 +143,43 @@ def create_app(
             "bound_tools": result.bound_tools,
             "fast_path": result.fast_path,
             "iterations": result.iterations,
+            "stop_reason": result.stop_reason,
             "provider_id": result.provider_id,
             "telemetry": result.telemetry.as_dict(),
         }
+
+    def build_dataset_payload(*, validation_error: str = "") -> dict[str, Any]:
+        csv_files = cfg.csv_files
+        resolved_paths = cfg.resolved_csv_paths()
+        return {
+            "config": {
+                "csv_dir": cfg.csv_dir_setting,
+                "csv_files": {table_name: csv_files.get(table_name, "") for table_name in TABLE_NAMES},
+            },
+            "defaults": normalize_data_settings(copy.deepcopy(DEFAULT_SETTINGS["data"])),
+            "status": {
+                "dataset_today": live_pipeline.dataset_today.isoformat(),
+                "csv_dir_resolved": str(cfg.csv_dir),
+                "settings_path": str(cfg.settings_path),
+                "validation_error": validation_error,
+                "tables": [
+                    {
+                        "name": table_name,
+                        "override_path": csv_files.get(table_name, ""),
+                        "resolved_path": str(resolved_paths[table_name]),
+                        "exists": resolved_paths[table_name].exists(),
+                        "source": "override" if csv_files.get(table_name, "") else "default",
+                    }
+                    for table_name in TABLE_NAMES
+                ],
+            },
+        }
+
+    def validate_pipeline(candidate_cfg: AppConfig) -> Pipeline:
+        try:
+            return Pipeline(candidate_cfg, secret_resolver=secrets.get)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Dataset validation failed: {exc}") from exc
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -135,6 +239,206 @@ def create_app(
             "verbose_trace": cfg.verbose_trace,
         }
 
+    @app.get("/api/settings/appearance")
+    def get_appearance_settings() -> dict[str, Any]:
+        return cfg.appearance
+
+    @app.put("/api/settings/appearance")
+    def put_appearance_settings(request: AppearanceSettingsRequest) -> dict[str, Any]:
+        nonlocal cfg
+        try:
+            cfg = update_appearance_settings(
+                cfg,
+                appearance={
+                    "theme_mode": request.theme_mode,
+                    "light_theme": request.light_theme,
+                    "dark_theme": request.dark_theme,
+                },
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return cfg.appearance
+
+    @app.get("/api/settings/dataset")
+    def get_dataset_settings() -> dict[str, Any]:
+        return build_dataset_payload()
+
+    @app.put("/api/settings/dataset")
+    def put_dataset_settings(request: DatasetSettingsRequest) -> dict[str, Any]:
+        nonlocal cfg, live_pipeline
+        try:
+            candidate_cfg = prepare_dataset_settings(
+                cfg,
+                data={
+                    "csv_dir": request.csv_dir,
+                    "csv_files": request.csv_files,
+                },
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        candidate_pipeline = validate_pipeline(candidate_cfg)
+        cfg = save_config(candidate_cfg)
+        live_pipeline = candidate_pipeline
+        return build_dataset_payload()
+
+    @app.post("/api/settings/dataset/reload")
+    def reload_dataset_settings() -> dict[str, Any]:
+        nonlocal live_pipeline
+        live_pipeline = validate_pipeline(cfg)
+        return build_dataset_payload()
+
+    @app.post("/api/settings/dataset/reset")
+    def reset_dataset_settings() -> dict[str, Any]:
+        nonlocal cfg, live_pipeline
+        candidate_cfg = prepare_dataset_settings(cfg, data=copy.deepcopy(DEFAULT_SETTINGS["data"]))
+        candidate_pipeline = validate_pipeline(candidate_cfg)
+        cfg = save_config(candidate_cfg)
+        live_pipeline = candidate_pipeline
+        return build_dataset_payload()
+
+    @app.post("/api/settings/dataset/upload/{table_name}")
+    def upload_dataset_table(table_name: str, request: DatasetTableUploadRequest) -> dict[str, Any]:
+        nonlocal cfg, live_pipeline
+        if table_name not in TABLE_NAMES:
+            raise HTTPException(status_code=404, detail=f"Unknown dataset table '{table_name}'.")
+        if not request.filename or not request.content:
+            raise HTTPException(status_code=400, detail="Dataset upload requires a CSV file.")
+        managed_dir = MANAGED_DATASET_ROOT / "overrides"
+        managed_dir.mkdir(parents=True, exist_ok=True)
+        managed_path = managed_dir / f"{table_name}-{uuid4().hex}.csv"
+        with tempfile.TemporaryDirectory(prefix=f"dataset-upload-{table_name}-") as temp_dir:
+            staged_path = Path(temp_dir) / f"{table_name}.csv"
+            staged_path.write_text(request.content, encoding="utf-8")
+            shutil.copy2(staged_path, managed_path)
+        candidate_payload = _dataset_settings_payload(cfg)
+        candidate_payload["csv_files"][table_name] = _config_path_for_storage(managed_path)
+        try:
+            candidate_cfg = prepare_dataset_settings(cfg, data=candidate_payload)
+            candidate_pipeline = validate_pipeline(candidate_cfg)
+        except HTTPException:
+            managed_path.unlink(missing_ok=True)
+            raise
+        cfg = save_config(candidate_cfg)
+        live_pipeline = candidate_pipeline
+        return build_dataset_payload()
+
+    @app.post("/api/settings/dataset/import-zip")
+    def import_dataset_zip(request: DatasetZipImportRequest) -> dict[str, Any]:
+        nonlocal cfg, live_pipeline
+        if not request.filename or not request.content_base64:
+            raise HTTPException(status_code=400, detail="Dataset import requires a .zip file.")
+        required_files = {f"{table_name}.csv": table_name for table_name in TABLE_NAMES}
+        with tempfile.TemporaryDirectory(prefix="dataset-import-") as temp_dir:
+            temp_root = Path(temp_dir)
+            archive_path = temp_root / "dataset.zip"
+            extracted_dir = temp_root / "dataset"
+            extracted_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                archive_path.write_bytes(base64.b64decode(request.content_base64))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Dataset import failed: invalid base64 payload.") from exc
+            try:
+                with zipfile.ZipFile(archive_path) as archive:
+                    members: dict[str, zipfile.ZipInfo] = {}
+                    for info in archive.infolist():
+                        if info.is_dir():
+                            continue
+                        basename = Path(info.filename).name.lower()
+                        if basename in required_files:
+                            if basename in members:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=f"Dataset import failed: duplicate '{basename}' found in zip.",
+                                )
+                            members[basename] = info
+                    missing = sorted(set(required_files) - set(members))
+                    if missing:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Dataset import failed: missing required CSVs: {', '.join(missing)}.",
+                        )
+                    for basename, table_name in required_files.items():
+                        target_path = extracted_dir / f"{table_name}.csv"
+                        with archive.open(members[basename]) as src, target_path.open("wb") as dst:
+                            shutil.copyfileobj(src, dst)
+            except zipfile.BadZipFile as exc:
+                raise HTTPException(status_code=400, detail="Dataset import failed: invalid zip archive.") from exc
+
+            managed_dir = MANAGED_DATASET_ROOT / "imports" / f"dataset-{uuid4().hex}"
+            shutil.copytree(extracted_dir, managed_dir)
+        candidate_payload = {
+            "csv_dir": _config_path_for_storage(managed_dir),
+            "csv_files": {},
+        }
+        try:
+            candidate_cfg = prepare_dataset_settings(cfg, data=candidate_payload)
+            candidate_pipeline = validate_pipeline(candidate_cfg)
+        except HTTPException:
+            shutil.rmtree(managed_dir, ignore_errors=True)
+            raise
+        cfg = save_config(candidate_cfg)
+        live_pipeline = candidate_pipeline
+        return build_dataset_payload()
+
+    @app.get("/api/settings/config")
+    def get_config_payload() -> dict[str, Any]:
+        return {"config": export_config_payload(cfg)}
+
+    @app.get("/api/chat/commands")
+    def list_chat_commands() -> dict[str, Any]:
+        return {"commands": [spec.as_dict() for spec in command_registry.specs()]}
+
+    @app.post("/api/chat/commands/execute")
+    def execute_chat_command(request: CommandExecuteRequest) -> dict[str, Any]:
+        try:
+            spec, result = command_registry.execute(
+                request.command,
+                CommandContext(tool_registry=live_pipeline.tool_registry),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown command '/{exc.args[0]}'.") from exc
+        payload = {
+            "answer": result.content,
+            "command": spec.as_dict(),
+            "metadata": {
+                **result.metadata,
+                "command": spec.as_dict(),
+            },
+        }
+        if request.session_id:
+            _append_turn_or_404(sessions, request.session_id, request.command, payload["answer"], payload["metadata"])
+        return payload
+
+    @app.put("/api/settings/config")
+    def put_config_payload(request: ConfigImportRequest) -> dict[str, Any]:
+        nonlocal cfg, live_pipeline, secrets, sessions
+        try:
+            candidate_cfg = prepare_import_config_payload(cfg, payload=request.config)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        validate_pipeline(candidate_cfg)
+        cfg = save_config(candidate_cfg)
+        secrets = SecretStore(cfg.llm_secrets_db_path)
+        sessions = SessionStore(cfg.ai_sessions_db_path)
+        evict_model_cache()
+        live_pipeline = Pipeline(cfg, secret_resolver=secrets.get)
+        providers = [
+            redact_provider(provider, has_secret=_has_secret(secrets, provider))
+            for provider in cfg.llm_providers
+        ]
+        return {
+            "config": export_config_payload(cfg),
+            "llm_providers": providers,
+            "model_routing": cfg.model_routing,
+            "ui": {
+                "default_gating_mode": cfg.default_gating_mode,
+                "verbose_trace": cfg.verbose_trace,
+            },
+            "appearance": cfg.appearance,
+        }
+
     @app.put("/api/settings/secrets/{secret_ref}")
     def put_secret(secret_ref: str, request: SecretWriteRequest) -> dict[str, Any]:
         secrets.set(secret_ref, request.value)
@@ -155,10 +459,26 @@ def create_app(
     def create_session(request: SessionCreateRequest) -> dict[str, Any]:
         return sessions.create_session(title=request.title)
 
+    @app.patch("/api/sessions/{session_id}")
+    def update_session(session_id: str, request: SessionUpdateRequest) -> dict[str, Any]:
+        try:
+            sessions.update_session_title(session_id, title=request.title)
+            return sessions.get_session_summary(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: str) -> dict[str, Any]:
         try:
             return sessions.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, Any]:
+        try:
+            sessions.delete_session(session_id)
+            return {"deleted": True, "session_id": session_id}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -216,14 +536,15 @@ def _append_turn_or_404(
     sessions: SessionStore,
     session_id: str,
     question: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | str,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     try:
         sessions.append_turn(
             session_id,
             question=question,
-            answer=str(payload.get("answer", "")),
-            metadata=payload,
+            answer=str(payload.get("answer", "")) if isinstance(payload, dict) else str(payload),
+            metadata=payload if isinstance(payload, dict) else (metadata or {}),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
