@@ -229,15 +229,19 @@ def build_prior_answer_verdict(
     referenced_message_id = int(referenced["id"]) if referenced and "id" in referenced else 0
     metadata = referenced.get("metadata") if referenced else {}
     evidence_fingerprint = ""
+    prior_tool_calls: list[Any] = []
     if isinstance(metadata, dict):
         stored_fingerprint = metadata.get("evidence_fingerprint")
         if isinstance(stored_fingerprint, dict):
             evidence_fingerprint = str(stored_fingerprint.get("sha256", "")).strip()
+        stored_tool_calls = metadata.get("tool_calls")
+        if isinstance(stored_tool_calls, list):
+            prior_tool_calls = stored_tool_calls
 
-    tool_names = [str(getattr(call, "name", "")).strip() for call in tool_calls if str(getattr(call, "name", "")).strip()]
+    tool_names = [_tool_call_name(call) for call in tool_calls if _tool_call_name(call)]
     entity_ids = _extract_entity_ids(tool_calls)
     numbers = _extract_numbers(tool_calls)
-    status = _classify_verdict(referenced_claim, entity_ids=entity_ids, numbers=numbers)
+    status = _classify_verdict(prior_tool_calls=prior_tool_calls, fresh_tool_calls=tool_calls)
 
     verdict: PriorAnswerVerdict = {
         "status": status,
@@ -436,7 +440,7 @@ def _extract_entity_ids(tool_calls: list[Any]) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
     for call in tool_calls:
-        result = getattr(call, "result", None)
+        result = _tool_call_result(call)
         if not isinstance(result, dict):
             continue
         for key in ("matched_inverter_ids", "anomaly_ids"):
@@ -464,7 +468,7 @@ def _extract_numbers(tool_calls: list[Any]) -> list[float]:
     found: list[float] = []
     seen: set[float] = set()
     for call in tool_calls:
-        result = getattr(call, "result", None)
+        result = _tool_call_result(call)
         if not isinstance(result, dict):
             continue
         for number in _extract_numbers_from_value(result):
@@ -498,30 +502,48 @@ def _extract_numbers_from_value(value: Any) -> list[float]:
     return []
 
 
-def _classify_verdict(referenced_claim: str, *, entity_ids: list[str], numbers: list[float]) -> PriorAnswerVerdictStatus:
-    clean_claim = referenced_claim.lower().strip()
-    if not clean_claim:
+def _classify_verdict(*, prior_tool_calls: list[Any], fresh_tool_calls: list[Any]) -> PriorAnswerVerdictStatus:
+    prior_entity_ids = {_entity_key(value) for value in _extract_entity_ids(prior_tool_calls)}
+    fresh_entity_ids = {_entity_key(value) for value in _extract_entity_ids(fresh_tool_calls)}
+    prior_numbers = {_number_key(value) for value in _extract_numbers(prior_tool_calls)}
+    fresh_numbers = {_number_key(value) for value in _extract_numbers(fresh_tool_calls)}
+
+    prior_entity_ids.discard("")
+    fresh_entity_ids.discard("")
+    if not prior_entity_ids and not prior_numbers:
         return "incomplete"
-    entity_tokens = [token.lower() for token in entity_ids]
-    number_tokens = _number_tokens(numbers)
-    if not entity_tokens and not number_tokens:
+    if not fresh_entity_ids and not fresh_numbers:
         return "incomplete"
-    entity_hits = [token for token in entity_tokens if token in clean_claim]
-    number_hits = [token for token in number_tokens if token in clean_claim]
-    if not entity_hits and not number_hits:
+
+    entity_supported = not prior_entity_ids or prior_entity_ids.issubset(fresh_entity_ids)
+    number_supported = not prior_numbers or prior_numbers.issubset(fresh_numbers)
+    if entity_supported and number_supported:
+        return "correct"
+    if prior_entity_ids and fresh_entity_ids and prior_entity_ids.isdisjoint(fresh_entity_ids):
         return "wrong"
-    if entity_tokens and len(entity_hits) == len(entity_tokens) and (not number_tokens or bool(number_hits)):
-        return "correct"
-    if number_tokens and len(number_hits) == len(number_tokens):
-        return "correct"
+    if prior_numbers and fresh_numbers and prior_numbers.isdisjoint(fresh_numbers):
+        return "wrong"
     return "incomplete"
 
 
-def _number_tokens(numbers: list[float]) -> list[str]:
-    tokens: list[str] = []
-    for number in numbers:
-        tokens.append(str(int(number)) if float(number).is_integer() else str(number))
-    return tokens
+def _tool_call_name(call: Any) -> str:
+    if isinstance(call, dict):
+        return str(call.get("name", "")).strip()
+    return str(getattr(call, "name", "")).strip()
+
+
+def _tool_call_result(call: Any) -> Any:
+    if isinstance(call, dict):
+        return call.get("result")
+    return getattr(call, "result", None)
+
+
+def _entity_key(value: str) -> str:
+    return str(value).strip().lower()
+
+
+def _number_key(value: float) -> float:
+    return round(float(value), 4)
 
 
 def _verdict_explanation(status: PriorAnswerVerdictStatus, *, entity_ids: list[str], numbers: list[float]) -> str:

@@ -419,6 +419,18 @@ def test_pipeline_emits_structured_prior_answer_verdict_for_dispute_turn(monkeyp
                 "role": "assistant",
                 "content": "The soiling-related hotspot anomalies are on INV_4135001_09 and INV_4136001_08 with anomaly ids 7 and 55.",
                 "metadata": {
+                    "tool_calls": [
+                        {
+                            "name": "anomalies",
+                            "args": {"status": "open", "anomaly_type": "hotspot", "cause": "soiling"},
+                            "result": {
+                                "ok": True,
+                                "matched": 2,
+                                "anomaly_ids": [7, 55],
+                                "matched_inverter_ids": ["INV_4135001_09", "INV_4136001_08"],
+                            },
+                        }
+                    ],
                     "evidence_fingerprint": {
                         "sha256": "abc123",
                     }
@@ -441,6 +453,88 @@ def test_pipeline_emits_structured_prior_answer_verdict_for_dispute_turn(monkeyp
         "reconcile_prior_answer",
     ]
     assert [event.kind for event in result.trace_events][-1] == "reconciliation_finished"
+
+
+def test_prior_answer_verdict_uses_stored_evidence_not_prior_answer_wording(monkeypatch):
+    pipeline = Pipeline(load_config())
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["C"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "anomalies",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Re-check hotspot anomalies caused by soiling",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+        return AgentResult(
+            answer="The re-check returns the same two hotspot anomalies caused by soiling.",
+            tool_calls=[
+                ToolCallRecord(
+                    name="anomalies",
+                    args={"status": "open", "anomaly_type": "hotspot", "cause": "soiling"},
+                    result={
+                        "ok": True,
+                        "matched": 2,
+                        "anomaly_ids": [7, 55],
+                        "matched_inverter_ids": ["INV_4135001_09", "INV_4136001_08"],
+                    },
+                    iteration=1,
+                    latency_ms=10,
+                )
+            ],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer(
+        "That answer looks wrong. Recheck only the hotspot anomalies caused by soiling.",
+        history_window=[
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": "Two matching anomalies were found.",
+                "metadata": {
+                    "tool_calls": [
+                        {
+                            "name": "anomalies",
+                            "result": {
+                                "ok": True,
+                                "matched": 2,
+                                "anomaly_ids": [7, 55],
+                                "matched_inverter_ids": ["INV_4135001_09", "INV_4136001_08"],
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert result.prior_answer_verdict is not None
+    assert result.prior_answer_verdict["status"] == "correct"
 
 
 def test_pipeline_loads_session_context_from_store_when_session_id_is_provided(monkeypatch):
