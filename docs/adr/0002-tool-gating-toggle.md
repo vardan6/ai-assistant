@@ -53,4 +53,3 @@ set in Settings. Demo both live and present the comparison.
   debrief talking point.
 - A static intent→subset map must be kept in sync with the tool set (mitigated by generous
   resolver inclusion). Detailed map defined in the tools session.
-</content>

@@ -36,4 +36,3 @@ Do **not** port-then-strip.
 - Cleanest submission and the best template seed.
 - "Graph" framing is dropped throughout; we describe a tool-calling loop instead.
 - Reuse list is enumerated in `docs/design/architecture.md`.
-</content>

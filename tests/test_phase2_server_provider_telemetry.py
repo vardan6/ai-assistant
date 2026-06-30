@@ -176,8 +176,10 @@ def test_server_streams_chat_and_persists_session(tmp_path):
     class FakePipeline:
         dataset_today = datetime.fromisoformat("2026-06-22T23:50:00")
         reference_now = datetime.fromisoformat("2026-06-22T23:50:00")
+        seen_session_ids: list[str] = []
 
-        def answer(self, question, *, provider_id="", gating_mode="gated", event_handler=None):  # noqa: ARG002
+        def answer(self, question, *, provider_id="", gating_mode="gated", session_id="", event_handler=None):  # noqa: ARG002
+            self.seen_session_ids.append(session_id)
             if event_handler is not None:
                 event_handler(TraceEvent(kind="tool_started", timestamp="2026-06-27T00:00:00+00:00", message="Calling tool 'plants'", tool_name="plants"))
                 event_handler(TraceEvent(kind="tool_finished", timestamp="2026-06-27T00:00:01+00:00", message="Tool 'plants' completed", tool_name="plants", latency_ms=9, ok=True))
@@ -209,7 +211,8 @@ def test_server_streams_chat_and_persists_session(tmp_path):
                 ),
             )
 
-    client = TestClient(create_app(config=config, pipeline=FakePipeline(), session_store=session_store, secret_store=secret_store))
+    fake_pipeline = FakePipeline()
+    client = TestClient(create_app(config=config, pipeline=fake_pipeline, session_store=session_store, secret_store=secret_store))
 
     health = client.get("/health")
     assert health.status_code == 200
@@ -229,12 +232,64 @@ def test_server_streams_chat_and_persists_session(tmp_path):
     assert [line["type"] for line in lines] == ["trace", "trace", "final"]
     assert lines[-1]["response"]["answer"] == "One plant is offline."
     assert lines[-1]["response"]["stop_reason"] == "final_answer"
+    assert fake_pipeline.seen_session_ids == [session_id]
 
     session = client.get(f"/api/sessions/{session_id}")
     assert session.status_code == 200
     body = session.json()
     assert body["title"] == "CLI chat"
     assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
+
+
+def test_server_serializes_prior_answer_verdict(tmp_path):
+    config = AppConfig(raw=json.loads(json.dumps(DEFAULT_SETTINGS)), settings_path=tmp_path / "common.local.json")
+
+    class FakePipeline:
+        dataset_today = datetime.fromisoformat("2026-06-22T23:50:00")
+        reference_now = datetime.fromisoformat("2026-06-22T23:50:00")
+
+        def answer(self, question, *, provider_id="", gating_mode="gated", session_id="", event_handler=None):  # noqa: ARG002
+            return PipelineAnswer(
+                answer="INV_4136001_08 has the larger estimated power loss.",
+                intent={
+                    "types": ["C"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "anomalies",
+                    "out_of_scope": False,
+                    "confidence": 0.95,
+                    "summary": "Dispute re-check",
+                },
+                intent_meta={"provider_name": "fake", "latency_ms": 4, "parse_errors": [], "fast_path": "", "session_id": session_id},
+                prior_answer_verdict={
+                    "status": "correct",
+                    "referenced_claim": "The soiling-related hotspot anomalies are on INV_4135001_09 and INV_4136001_08.",
+                    "tool_names": ["anomalies"],
+                    "numbers": [55.0],
+                },
+                gating_mode=gating_mode,
+                bound_tools=["anomalies"],
+                iterations=1,
+                stop_reason="final_answer",
+                trace_events=[],
+                telemetry=TelemetrySummary(
+                    started_at="2026-06-27T00:00:00+00:00",
+                    finished_at="2026-06-27T00:00:01+00:00",
+                    elapsed_ms=1000,
+                    intent_model="intent-model",
+                    synthesis_model="synth-model",
+                    intent_usage=UsageSnapshot(input_tokens=5, output_tokens=3, total_tokens=8),
+                    synthesis_usage=UsageSnapshot(input_tokens=10, output_tokens=4, total_tokens=14),
+                ),
+            )
+
+    client = TestClient(create_app(config=config, pipeline=FakePipeline()))
+
+    response = client.post("/api/chat", json={"question": "Recheck that answer."})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["prior_answer_verdict"]["tool_names"] == ["anomalies"]
+    assert payload["prior_answer_verdict"]["numbers"] == [55.0]
 
 
 def test_server_serves_web_ui_and_assets(tmp_path):
@@ -268,6 +323,11 @@ def test_server_serves_web_ui_and_assets(tmp_path):
     assert "function renderDatasetSettings()" in app_js.text
     assert "function uploadDatasetTable(tableName)" in app_js.text
     assert "function importDatasetZip()" in app_js.text
+    assert 'gatingMode: "gated"' in app_js.text
+    assert app_js.text.count("state.gatingMode = getDefaultGatingMode();") == 3
+    assert 'gatingMode: "bind_all"' not in app_js.text
+    assert 'state.gatingMode = "bind_all";' not in app_js.text
+    assert "gating_mode: state.gatingMode" in app_js.text
 
     styles = client.get("/assets/styles.css")
     assert styles.status_code == 200
@@ -660,13 +720,24 @@ def test_server_config_io_round_trip_and_validation(tmp_path):
 
     payload["appearance"]["light_theme"] = "vscode_light"
     payload["ui"]["default_gating_mode"] = "bind_all"
+    payload["ui"]["verbose_trace"] = False
+    payload["ui"]["use_reference_now_anchor"] = False
     payload["llm_providers"][1]["base_url"] = "http://127.0.0.1:11434"
 
     imported = client.put("/api/settings/config", json={"config": payload})
     assert imported.status_code == 200
     body = imported.json()
     assert body["appearance"]["light_theme"] == "vscode_light"
-    assert body["ui"]["default_gating_mode"] == "bind_all"
+    assert body["ui"] == {
+        "default_gating_mode": "bind_all",
+        "verbose_trace": False,
+        "use_reference_now_anchor": False,
+    }
+    assert body["config"]["ui"] == {
+        "default_gating_mode": "bind_all",
+        "verbose_trace": False,
+        "use_reference_now_anchor": False,
+    }
     assert body["llm_providers"][1]["base_url"] == "http://127.0.0.1:11434"
 
     malformed_dataset_dir = _copy_dataset(tmp_path, "bad-config-dataset")

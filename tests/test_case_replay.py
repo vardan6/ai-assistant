@@ -3,7 +3,19 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.ai import run_agent_loop
-from app.case_replay import ReplaySpec, build_replay_specs, evaluate_payload
+from app.case_replay import (
+    ReplaySpec,
+    ReplayTurnSpec,
+    RequiredToolArgs,
+    RequiredToolResultField,
+    SummaryRow,
+    build_multi_turn_specs,
+    build_replay_specs,
+    evaluate_payload,
+    evaluate_turn_payload,
+    print_summary_table,
+    replay_spec_from_mapping,
+)
 from app.config import load_config
 from app.data import PandasDataSource
 from app.pipeline import Pipeline
@@ -37,6 +49,30 @@ def test_replay_specs_cover_oracle_and_graceful_degradation_cases():
     assert "which plant" in specs["X6"].required_text
     assert specs["AN6"].required_bound_tools == ("anomalies", "inverters", "plants")
     assert specs["AN6"].require_structured_tool_results is True
+    assert specs["D5"].required_tool_args == (
+        RequiredToolArgs(tool="weather_readings", args={"plant": "4136001", "window": "today"}),
+    )
+    assert RequiredToolResultField(
+        tool="anomalies",
+        path=("status_counts", "open"),
+        value=7,
+    ) in specs["AN6"].required_tool_result_fields
+
+
+def test_multi_turn_dispute_fixture_requires_structured_verdict_assertions():
+    specs = build_multi_turn_specs()
+
+    dispute_turn = specs["MT-D3-DISPUTE"].turns[1]
+
+    assert dispute_turn.require_prior_answer_verdict is True
+    assert dispute_turn.required_prior_answer_verdict_text == (
+        "correct",
+        "hotspot",
+        "soiling",
+        "anomalies",
+    )
+    assert dispute_turn.required_prior_answer_verdict_numbers == (55.0,)
+    assert dispute_turn.deferred_assertions == ()
 
 
 def test_evaluate_payload_checks_tools_text_and_numbers():
@@ -87,6 +123,154 @@ def test_evaluate_payload_checks_bound_tools_trace_and_structured_tool_results()
     checks = evaluate_payload(spec, payload)
 
     assert all(check.ok for check in checks)
+
+
+def test_replay_spec_mapping_loads_tool_arg_and_result_field_requirements():
+    spec = replay_spec_from_mapping(
+        "demo",
+        {
+            "question": "demo question",
+            "expected_intent_types": ["C"],
+            "required_tool_args": [
+                {"tool": "anomalies", "args": {"plant": "4135001", "status": "unresolved"}},
+            ],
+            "required_tool_result_fields": [
+                {"tool": "anomalies", "path": ["status_counts", "open"], "value": 7},
+                {"tool": "anomalies", "field": "status_counts.monitoring", "expected": 3},
+            ],
+        },
+    )
+
+    assert spec.required_tool_args == (
+        RequiredToolArgs(tool="anomalies", args={"plant": "4135001", "status": "unresolved"}),
+    )
+    assert spec.required_tool_result_fields == (
+        RequiredToolResultField(tool="anomalies", path=("status_counts", "open"), value=7),
+        RequiredToolResultField(tool="anomalies", path=("status_counts", "monitoring"), value=3),
+    )
+
+
+def test_evaluate_payload_checks_tool_args_and_result_fields():
+    spec = ReplaySpec(
+        case_id="demo",
+        question="demo question",
+        expected_intent_types=("C",),
+        required_tool_args=(
+            RequiredToolArgs(tool="anomalies", args={"plant": "4135001", "status": "unresolved"}),
+        ),
+        required_tool_result_fields=(
+            RequiredToolResultField(tool="anomalies", path=("matched",), value=15),
+            RequiredToolResultField(tool="anomalies", path=("status_counts", "open"), value=7),
+        ),
+    )
+    payload = {
+        "answer": "Rajasthan has 15 unresolved anomalies.",
+        "intent": {"types": ["C"]},
+        "tool_calls": [
+            {
+                "name": "anomalies",
+                "args": {"plant": "4135001", "status": "unresolved", "limit": 20},
+                "result": {"ok": True, "matched": 15, "status_counts": {"open": 7}},
+            }
+        ],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_evaluate_payload_reports_missing_tool_args_and_result_fields():
+    spec = ReplaySpec(
+        case_id="demo",
+        question="demo question",
+        expected_intent_types=("C",),
+        required_tool_args=(
+            RequiredToolArgs(tool="anomalies", args={"plant": "4135001", "status": "unresolved"}),
+        ),
+        required_tool_result_fields=(
+            RequiredToolResultField(tool="anomalies", path=("status_counts", "open"), value=7),
+        ),
+    )
+    payload = {
+        "answer": "Rajasthan has anomalies.",
+        "intent": {"types": ["C"]},
+        "tool_calls": [
+            {
+                "name": "anomalies",
+                "args": {"plant": "Rajasthan Solar Park", "status": "open"},
+                "result": {"ok": True, "status_counts": {"open": 5}},
+            }
+        ],
+        "stop_reason": "final_answer",
+    }
+
+    failed = {check.name for check in evaluate_payload(spec, payload) if not check.ok}
+
+    assert "tool_args:1:anomalies" in failed
+    assert "tool_result:1:anomalies:status_counts.open" in failed
+
+
+def test_evaluate_turn_payload_checks_structured_prior_answer_verdict():
+    spec = ReplayTurnSpec(
+        turn_id="dispute-recheck",
+        question="recheck question",
+        expected_intent_types=("C",),
+        required_tools=("anomalies",),
+        required_text=("55",),
+        required_numbers=(55.0,),
+        require_prior_answer_verdict=True,
+        required_prior_answer_verdict_text=("wrong", "hotspot", "soiling", "anomalies"),
+        required_prior_answer_verdict_numbers=(55.0,),
+    )
+    payload = {
+        "answer": "INV_4135001_09 has the larger estimated power loss at 55 kWh.",
+        "intent": {"types": ["C"]},
+        "tool_calls": [{"name": "anomalies"}],
+        "stop_reason": "final_answer",
+        "prior_answer_verdict": {
+            "status": "wrong",
+            "tool_names": ["anomalies"],
+            "predicate_summary": "hotspot anomalies caused by soiling",
+            "numbers": [55.0],
+        },
+    }
+
+    checks = evaluate_turn_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_print_summary_table_renders_pass_fail_grid(capsys):
+    rows = [
+        SummaryRow(
+            case_id="D3",
+            ok=True,
+            kind="case",
+            intent_types=("C",),
+            tools=("anomalies",),
+        ),
+        SummaryRow(
+            case_id="X4",
+            ok=False,
+            kind="case",
+            intent_types=("B",),
+            tools=("performance_ratio", "inverters", "plants"),
+            failed_checks=("answer_numbers",),
+        ),
+    ]
+
+    print_summary_table(rows)
+
+    out = capsys.readouterr().out
+    assert "Summary" in out
+    assert "✓ PASS" in out
+    assert "✗ FAIL" in out
+    assert "D3" in out
+    assert "X4" in out
+    assert "answer_numbers" in out
+    assert "Totals: 1 passed, 1 failed, 2 total" in out
 
 
 def test_run_agent_loop_feeds_structured_json_not_raw_rows():

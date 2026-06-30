@@ -190,14 +190,19 @@ def create_app(
     cfg = config or load_config()
     secrets = secret_store or SecretStore(cfg.llm_secrets_db_path)
     sessions = session_store or SessionStore(cfg.ai_sessions_db_path)
-    live_pipeline = pipeline or Pipeline(cfg, secret_resolver=secrets.get)
     command_registry = build_command_registry()
+
+    def build_pipeline(current_cfg: AppConfig) -> Pipeline:
+        return Pipeline(current_cfg, secret_resolver=secrets.get, session_store=sessions)
+
+    live_pipeline = pipeline or build_pipeline(cfg)
 
     def serialize_answer(result: PipelineAnswer) -> dict[str, Any]:
         return {
             "answer": result.answer,
             "intent": result.intent,
             "intent_meta": result.intent_meta,
+            "prior_answer_verdict": result.prior_answer_verdict,
             "tool_calls": [asdict(call) for call in result.tool_calls],
             "trace_events": [event.as_dict() for event in result.trace_events],
             "gating_mode": result.gating_mode,
@@ -238,7 +243,7 @@ def create_app(
 
     def validate_pipeline(candidate_cfg: AppConfig) -> Pipeline:
         try:
-            return Pipeline(candidate_cfg, secret_resolver=secrets.get)
+            return build_pipeline(candidate_cfg)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Dataset validation failed: {exc}") from exc
 
@@ -280,7 +285,7 @@ def create_app(
             model_routing=request.model_routing,
         )
         evict_model_cache()
-        live_pipeline = Pipeline(cfg, secret_resolver=secrets.get)
+        live_pipeline = build_pipeline(cfg)
         providers = [
             redact_provider(provider, has_secret=_has_secret(secrets, provider))
             for provider in cfg.llm_providers
@@ -505,7 +510,7 @@ def create_app(
         secrets = SecretStore(cfg.llm_secrets_db_path)
         sessions = SessionStore(cfg.ai_sessions_db_path)
         evict_model_cache()
-        live_pipeline = Pipeline(cfg, secret_resolver=secrets.get)
+        live_pipeline = build_pipeline(cfg)
         _prune_superseded_managed_datasets(previous_cfg, cfg)
         providers = [
             redact_provider(provider, has_secret=_has_secret(secrets, provider))
@@ -518,6 +523,7 @@ def create_app(
             "ui": {
                 "default_gating_mode": cfg.default_gating_mode,
                 "verbose_trace": cfg.verbose_trace,
+                "use_reference_now_anchor": cfg.use_reference_now_anchor,
             },
             "appearance": cfg.appearance,
         }
@@ -572,6 +578,7 @@ def create_app(
                 request.question,
                 provider_id=request.provider_id,
                 gating_mode=request.gating_mode,
+                session_id=request.session_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -590,6 +597,7 @@ def create_app(
                     request.question,
                     provider_id=request.provider_id,
                     gating_mode=request.gating_mode,
+                    session_id=request.session_id,
                     event_handler=lambda event: events.put({"type": "trace", "event": event.as_dict()}),
                 )
                 payload = serialize_answer(result)

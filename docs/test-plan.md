@@ -11,10 +11,14 @@
 > **full per-surface case catalog** (plants…anomalies + cross-cutting), exceeding
 > the spec's A/B/C examples. The former **[oracle⁺]** placeholders are now pinned
 > in `docs/golden-answers.md`; the replay harness and rubric checks live in
-> `app/case_replay.py` + `scripts/cli_case_replay.py`. **CLI target:** every case
-> in this plan (51 behavioural + 5 structural probes) is meant to run through CLI
-> replay; 15 cases have replay specs today (listed in §3.12). Still pending: the
-> live full-catalog replay against the real chat stack.
+> `app/case_replay.py` + `scripts/cli_case_replay.py`. **Execution order:** run
+> the initial-task **15-question gate** first (`D1–D6`, `A1–A3`, `B1–B3`,
+> `C1–C3`); then run **Gate 2** — the remaining 36 single-turn behavioural cases
+> from the 51-case canonical catalog plus the 4 multi-turn transcript fixtures —
+> plus the 5 structural probes. Gate 2 is split into `gate2a` (18 cases) and
+> `gate2b` (18 cases + 4 transcripts) for parallel execution. Some task rows are
+> repeated under different IDs in the canonical catalog; those are tracked
+> explicitly in §3.12 so no case meaning is dropped.
 
 ---
 
@@ -138,9 +142,16 @@ bound the suite so effort isn't spent here.
 ### 1.10 Remaining open item
 
 The earlier section-level TODOs are reconciled into the runnable harness and
-probe tests. The one material item outstanding is the live replay of the **full**
-catalog — all 51 cases + the 5 structural probes — through the configured chat
-stack; 15 cases are replay-backed today (roadmap §2b / §3.12).
+probe tests. The one material item outstanding is the live replay of the staged
+CLI program defined in §3.12:
+
+- Gate 1: the initial-task 15-question set from `solar_interview_task.md`
+  (`D1–D6`, `A1–A3`, `B1–B3`, `C1–C3`).
+- Gate 2: the remaining 36 behavioural cases from the 51-case canonical catalog
+  after removing same-meaning aliases already covered by Gate 1, plus the 5
+  structural probes.
+
+No case ID is removed from the plan; repeated meanings are kept and mapped.
 
 ---
 
@@ -267,7 +278,7 @@ not a graded surface.
 
 | ID | Question | Intent | Chain | Expected | Trap |
 |----|----------|--------|-------|----------|------|
-| W1 | What's the weather at Gujarat today? | A+chain | resolve→id → weather @ anchor | = D5 values | anchor day |
+| W1 | Give me today's weather snapshot for the Gujarat site. | A+chain | resolve→id → weather @ anchor | = D5 values | anchor day |
 | W2 | Average irradiation at Rajasthan last week. | B+chain | resolve→id → weather mean irradiation, window | **253.60 W/m²** | mean over readings |
 | W3 | Which plant had the highest cloud cover this month? | B | weather group_by plant, max/mean cloud_cover | Oracle pins **monthly mean** cloud cover: Rajasthan at **23.66%** (peak on same plant **58.8%**) | group + reduce in code |
 | W4 | Was there any rainfall at Tamil Nadu this week? | A/B+chain | resolve→id → weather sum/any rainfall_mm | **No**; total rainfall **0.0 mm** | int column; sum vs any |
@@ -368,17 +379,75 @@ not a graded surface.
   architecture probes for rubric rows 1–2 and the scripted chain/no-raw-row
   checks behind rows 3–4.
 
-**Automated today** (15 replay specs in `app/case_replay.py`): D2, D3, D4, D5,
+**Execution order (authoritative):**
+
+1. **Gate 1 — initial-task 15-question set.** Run the questions taken directly
+   from `docs/solar_interview_task.md`: `D1–D6`, `A1–A3`, `B1–B3`, `C1–C3`.
+   ```
+   ./run-case-replay.sh --gate gate1
+   ```
+2. **Gate 2 — remaining canonical behavioural coverage + multi-turn transcripts.**
+   After Gate 1 passes, run `gate2a` and `gate2b` in parallel — two terminals,
+   one server. `gate2b` includes the 4 multi-turn transcript fixtures.
+   ```
+   # terminal A
+   ./run-case-replay.sh --gate gate2a
+   # terminal B (simultaneously)
+   ./run-case-replay.sh --gate gate2b
+   ```
+   Or run everything sequentially: `./run-case-replay.sh --gate gate2`
+3. **Structural probes.** Run the 5 requirement probes in §3.10.
+
+**Gate 1 alias map into the 51-case canonical catalog** (same meaning, different
+ID; keep both IDs, do not count twice):
+
+| Initial-task ID | Canonical catalog ID | Meaning |
+|-----------------|----------------------|---------|
+| D1 | D1 | demo question; exact same case |
+| D2 | D2 | demo question; exact same case |
+| D3 | D3 | demo question; exact same case |
+| D4 | D4 | demo question; exact same case |
+| D5 | D5 | demo question; exact same case |
+| D6 | D6 | demo question; exact same case |
+| A1 | P1 | offline plants |
+| A2 | I1 | inverters in fault |
+| A3 | AL1 | open critical alerts |
+| B1 | G1 | average daily yield per plant over last week |
+| B2 | G4 | inverter with highest performance ratio |
+| B3 | AL5 | mean time to resolve an alert |
+| C1 | AN1 | open hotspot anomalies |
+| C2 | AN2 | anomalies caused by soiling |
+| C3 | AN6 | unresolved anomalies for Rajasthan Solar Park |
+
+**Gate 2 — 40 items total** (36 single-turn cases + 4 multi-turn transcripts):
+
+`gate2a` (18 single-turn cases — run in parallel with `gate2b`):
+- `P2`, `P3`, `P4`, `P5`
+- `I2`, `I3`, `I4`, `I5`
+- `G2`, `G3`, `G5`, `G6`
+- `W1`, `W2`, `W3`, `W4`
+- `AL2`, `AL3`
+
+`gate2b` (18 single-turn cases + 4 multi-turn transcripts):
+- `AL4`, `AL6`
+- `M1`, `M2`, `M3`, `M4`, `M5`
+- `AN3`, `AN4`, `AN5`, `AN7`
+- `X1`, `X2`, `X3`, `X4`, `X5`, `X6`, `X7`
+- `MT-D3-FOLLOWUP`, `MT-D3-DISPUTE`, `MT-PRIOR-ANSWER`, `MT-RESOLVED-AMBIGUITY`
+
+**Automated today** (historical replay subset, not the final Gate 1 list; 15
+single-turn replay specs currently in `app/case_replay.py`): D2, D3, D4, D5,
 D6, P4, I5, G2, G4, W3, AL5, AN6, X2, X4, X6.
 
 **Authored today for multi-turn replay** (fixture-backed transcripts under
-`tests/fixtures/multi_turn/`): `MT-D3-FOLLOWUP`, `MT-D3-DISPUTE`,
-`MT-PRIOR-ANSWER`, `MT-RESOLVED-AMBIGUITY`.
+`tests/fixtures/multi_turn/`, included in `gate2b`): `MT-D3-FOLLOWUP`,
+`MT-D3-DISPUTE`, `MT-PRIOR-ANSWER`, `MT-RESOLVED-AMBIGUITY`.
 
-**Pending — the CLI target is the full catalog:** all 51 behavioural cases + the
-5 structural probes (§3.10) are meant to run through CLI replay. The remaining 36
-behavioural cases (and the probes) still need replay specs and a live
-full-catalog run against the configured chat stack (roadmap §2b).
+**Pending — staged CLI target:** Gate 1 is now represented as the initial-task
+15-question set, but the live run is still pending in this environment; after
+that, Gate 2 (36 single-turn cases + 4 multi-turn transcripts, parallelisable
+as `gate2a`/`gate2b`) and the 5 structural probes (§3.10) still need a live
+run against the configured chat stack.
 
 ### 3.13 Multi-turn transcript format
 
@@ -419,8 +488,8 @@ Each file defines one replay session and a turn-by-turn expectation contract.
 
 - Keep assertions on durable machine-checkable signals: intent tags, tool chain,
   answer numerics, identifiers, and explicit stop reasons.
-- Do not assert on free-form reconciliation prose. Once Lane C lands, D2 should
-  bind reconciliation checks to structured `prior_answer_verdict`, not wording.
+- Do not assert on free-form reconciliation prose. D2 binds reconciliation
+  checks to structured `prior_answer_verdict`, not wording.
 - For verdict assertions, prefer semantic tokens and numbers that should survive
   harmless schema reshaping; Lane D owns the assertions, Lane C owns the exact
   verdict key layout.
@@ -433,7 +502,7 @@ Each file defines one replay session and a turn-by-turn expectation contract.
 
 - `MT-D3-FOLLOWUP` — baseline D3 answer, then a follow-up that narrows to the
   higher-loss inverter.
-- `MT-D3-DISPUTE` — baseline D3 answer, then a dispute turn with deferred
+- `MT-D3-DISPUTE` — baseline D3 answer, then a dispute turn with structured
   `prior_answer_verdict` assertions against the structured verdict object.
 - `MT-PRIOR-ANSWER` — ask for the worst-performing plant, then recall the prior
   answer without repeating the whole query.

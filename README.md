@@ -7,13 +7,17 @@ tool selection → in-code aggregation → refusal-guarded synthesis.
 > Design lives in `docs/design/`, requirements in `docs/requirements/`, and
 > decisions in `docs/adr/`.
 
-## Phase 0 — what works now
+## Current implementation
 
-- `DataSource` interface + `PandasDataSource` loading the 7 CSVs once; `dataset_today`
-  anchored to the dataset's latest timestamp (~2026-06-22), not wall-clock.
-- One `plants` tool under a uniform `ToolRegistry` (returns structured dicts).
-- Explicit, logged intent classification (smalltalk fast-path + LLM→JSON A/B/C schema).
-- A bare iterative tool-calling loop, wired end to end in a CLI.
+- `DataSource` interface + `PandasDataSource` loading the 7 CSVs once; dataset-relative
+  time anchored to the dataset's latest timestamp (~2026-06-22), not wall-clock.
+- A uniform `ToolRegistry` with the per-surface dataset tools plus derived/tooling support
+  used by the replay harness and synthesis pipeline.
+- Explicit, logged turn routing and intent classification, with graph-state scaffolding for
+  the committed LangGraph redesign now in place, while the real `StateGraph` runtime is still
+  pending.
+- FastAPI server, Web UI, server-backed CLI, persisted sessions/settings, dataset config
+  import/export, and behavioural replay gates.
 
 ## Dataset profiling
 
@@ -64,6 +68,7 @@ is often stale/invalid data or a vocabulary mismatch, not a tool bug.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # Configure a provider (one of):
 export OPENAI_API_KEY=sk-...            # uses the pre-seeded OpenAI provider, or
@@ -170,5 +175,156 @@ Do not pass both a positional prompt and `--prompt` in the same command.
 ## Test
 
 ```bash
-python -m pytest -q        # 15 offline tests (no LLM/network needed)
+python -m pytest -q
+python -m compileall app scripts
+rg -n "</content>|</invoke>" README.md docs
 ```
+
+`pytest` is the offline/unit-style suite. The staged behavioural replay program
+is separate and runs through the live server/chat API.
+
+`requirements.txt` carries runtime dependencies; `requirements-dev.txt` adds the local test
+dependency. The `rg` command is the lightweight docs-hygiene check for stray copy artifacts in
+durable documentation.
+
+## Case Replay Gates
+
+The replay harness has two behavioural gates:
+
+- `gate1` — the initial-task 15-question set from `docs/solar_interview_task.md`
+  (`D1–D6`, `A1–A3`, `B1–B3`, `C1–C3`)
+- `gate2` — the remaining 36 canonical behavioural cases from `docs/test-plan.md`
+  plus 4 multi-turn transcript fixtures
+
+Use the shell wrapper:
+
+```bash
+./run-case-replay.sh --gate gate1
+./run-case-replay.sh --gate gate2
+```
+
+The wrapper covers server startup for you:
+
+- if the FastAPI server is already running on `127.0.0.1:9006`, it reuses it
+- otherwise it starts `app.server`, waits for readiness, then launches replay
+
+So the normal operator path is just:
+
+```bash
+./run-case-replay.sh --gate gate1
+./run-case-replay.sh --gate gate2
+```
+
+You do not need to start `./run-web-server.sh` first unless you specifically
+want the server running separately.
+
+### What The Command Runs
+
+`./run-case-replay.sh` forwards to:
+
+```bash
+.venv/bin/python -m app.case_replay --server http://127.0.0.1:9006 ...
+```
+
+The replay CLI supports:
+
+- `--gate gate1`
+- `--gate gate2`
+- `--case CASE_ID` to run one or more specific single-turn cases
+- `--transcript TRANSCRIPT_ID` to run multi-turn transcript fixtures
+- `--gating-mode gated|bind_all`
+- `--server URL`
+
+Examples:
+
+```bash
+./run-case-replay.sh --gate gate1
+./run-case-replay.sh --gate gate2 --gating-mode bind_all
+./run-case-replay.sh --case D3 --case X4
+./run-case-replay.sh --transcript MT-D3-DISPUTE
+```
+
+### Output
+
+Replay output is printed to the terminal as plain text. For each case, the
+harness prints:
+
+- case id and `PASS` / `FAIL`
+- the question text
+- detected intent types
+- tool calls used
+- individual check results such as intent, tools, text, numbers, trace, and
+  stop reason
+
+Typical shape:
+
+```text
+D3: PASS
+  question: Which inverters have open hotspot anomalies caused by soiling?
+  intent: ['C']
+  tools: ['anomalies']
+  - intent_types: ok (...)
+  - tool_calls: ok (...)
+  - answer_text: ok (...)
+  - answer_numbers: ok (...)
+```
+
+At the end of the run, the harness also prints a compact summary table:
+
+```text
+Summary
+| Status | Kind | Case | Intent | Tools      | Failed Checks  |
+|--------|------|------|--------|------------|----------------|
+| ✓ PASS | case | D3   | C      | anomalies  | -              |
+| ✗ FAIL | case | X4   | B      | perform... | answer_numbers |
+
+Totals: 1 passed, 1 failed, 2 total
+```
+
+The process exits non-zero if any selected case fails, so it is suitable for
+shell scripting and CI.
+
+### Saving Results
+
+If you want a file artifact, redirect or tee the output:
+
+```bash
+./run-case-replay.sh --gate gate1 | tee gate1-replay.txt
+./run-case-replay.sh --gate gate2 | tee gate2-replay.txt
+```
+
+Or keep stderr and stdout together:
+
+```bash
+./run-case-replay.sh --gate gate1 > gate1-replay.txt 2>&1
+./run-case-replay.sh --gate gate2 > gate2-replay.txt 2>&1
+```
+
+This is useful when you want a human or an AI agent to review the exact replay
+report after the run.
+
+### Validation Workflow
+
+Recommended order:
+
+1. Run Gate 1 and confirm all 15 initial-task questions pass.
+2. If Gate 1 passes, run Gate 2 for the remaining 36 canonical behavioural
+   cases plus the multi-turn transcript fixtures.
+3. If needed, run specific transcripts for multi-turn validation.
+4. Review any `FAIL` lines and their failed checks.
+
+Example:
+
+```bash
+./run-case-replay.sh --gate gate1 | tee gate1-replay.txt
+./run-case-replay.sh --gate gate2 | tee gate2-replay.txt
+./run-case-replay.sh --transcript MT-D3-DISPUTE | tee mt-d3-dispute.txt
+```
+
+After that:
+
+- if everything passes, the staged behavioural replay is green
+- if anything fails, inspect the failed case block in the saved output file
+- use the final summary table to spot failing case ids quickly
+- hand those files to a reviewer, or ask an AI agent to summarize failures and
+  suggest fixes

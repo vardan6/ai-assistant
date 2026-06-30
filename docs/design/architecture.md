@@ -204,4 +204,3 @@ Intent `out_of_scope` flag + synthesis prompt guarded to explicitly refuse when 
 empty/insufficient or required data does not exist (e.g. Q6 revenue-from-downtime). If the tool
 loop exhausts its iteration budget without a final answer, the pipeline returns an explicit
 fallback message instead of a blank response. Never fabricate.
-</content>

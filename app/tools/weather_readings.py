@@ -53,6 +53,7 @@ def weather_summary(
     frame = _filter_window(frame, "timestamp", window, context)
     frame = frame.sort_values("timestamp", ascending=False)
     limited = clamp_limit(limit)
+    recent = records(frame, _FIELDS, limit=limited)
     group = str(aggregate_by or "overall").strip().lower()
     if group == "plant":
         results = (
@@ -101,6 +102,7 @@ def weather_summary(
         "aggregate_by": "overall",
         "matched": int(len(frame)),
         "latest_timestamp": _latest_timestamp(frame),
+        "latest_reading": recent[0] if recent else None,
         "summary": {
             "avg_ambient_temp": _avg(frame, "ambient_temp"),
             "avg_module_temp": _avg(frame, "module_temp"),
@@ -111,7 +113,7 @@ def weather_summary(
             "avg_cloud_cover_pct": _avg(frame, "cloud_cover_pct"),
             "total_rainfall_mm": _sum(frame, "rainfall_mm"),
         },
-        "recent_readings": records(frame, _FIELDS, limit=limited),
+        "recent_readings": recent,
     }
 
 
@@ -196,8 +198,8 @@ def register(registry: ToolRegistry) -> None:
         ToolSpec(
             name="weather_readings",
             description=(
-                "Summarize weather readings for a plant. Returns aggregate weather metrics and "
-                "a small recent-reading sample. Supports dataset-anchored windows and plant ranking "
+                "Summarize weather readings for a plant. Returns aggregate weather metrics, an explicit "
+                "latest_reading snapshot, and a small recent-reading sample. Supports dataset-anchored windows and plant ranking "
                 "by average cloud cover."
             ),
             parameters=PARAMETERS,

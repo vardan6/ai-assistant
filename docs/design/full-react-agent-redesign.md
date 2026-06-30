@@ -388,8 +388,10 @@ self-sufficient:
 
 - Unit + integration pass: tool unit tests, pipeline, server/session, CLI, and
   case-replay tests; fix or explicitly triage every regression.
-- Single-turn CLI replay pass: re-run the full 15-case catalog (the 2b baseline
-  is invalidated because the runtime changed).
+- Single-turn CLI replay passes: first re-run the initial-task 15-question gate
+  (`D1–D6`, `A1–A3`, `B1–B3`, `C1–C3`); then run the remaining 36 canonical
+  behavioural cases from the 51-case catalog. The 2b historical 15-case replay
+  subset is invalidated because the runtime changed.
 - Multi-turn CLI replay pass: run the new multi-turn suite against the oracle.
 
 ## State-store and streaming constraints

@@ -3,6 +3,7 @@
   "title": "D3 answer disputed on the next turn",
   "notes": [
     "The second turn is written for reconciliation coverage once Lane C lands.",
+    "The baseline answer is correct; this dispute should prove the agent defends it after re-checking the same hotspot/soiling evidence.",
     "Verdict checks intentionally match semantic tokens inside the structured verdict object so Lane D does not hard-code Lane C's final field names."
   ],
   "turns": [
@@ -22,7 +23,7 @@
       "required_text": ["55"],
       "required_numbers": [55.0],
       "require_prior_answer_verdict": true,
-      "required_prior_answer_verdict_text": ["wrong", "hotspot", "soiling"],
+      "required_prior_answer_verdict_text": ["correct", "hotspot", "soiling", "anomalies"],
       "required_prior_answer_verdict_numbers": [55.0]
     }
   ]

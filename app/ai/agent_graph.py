@@ -1,8 +1,11 @@
 """Lane C agent-context helpers used by the runtime transition."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import re
-from typing import Any, Literal, TypedDict
+from typing import Any, Callable, Literal, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 TurnKind = Literal[
     "data_question",
@@ -16,6 +19,16 @@ TurnKind = Literal[
 ]
 
 PriorAnswerVerdictStatus = Literal["correct", "wrong", "incomplete"]
+GraphNodeName = Literal[
+    "load_session_context",
+    "route_local",
+    "classify_intent",
+    "resolve_follow_up",
+    "tool_free_reply",
+    "out_of_scope_reply",
+    "run_tool_loop",
+    "reconcile_prior_answer",
+]
 
 _PLANT_NAMES = (
     "Rajasthan Solar Park",
@@ -26,6 +39,18 @@ _AMBIGUOUS_PLANT_QUESTIONS = {
     "how is the plant doing?",
     "how is the plant doing",
 }
+_METRIC_CONTEXT_CUES = (
+    "performance ratio",
+    "daily yield",
+    "total yield",
+    "total energy",
+    "feed-in tariff",
+    "feed in tariff",
+    "cloud cover",
+    "weather",
+    "mean time",
+    "mttr",
+)
 
 
 class PromptHistoryMessage(TypedDict):
@@ -58,6 +83,40 @@ class AgentContext(TypedDict):
     latest_user_message: str
     history_window: list[SessionHistoryMessage]
     prompt_history: list[PromptHistoryMessage]
+
+
+@dataclass(slots=True)
+class AgentGraphState:
+    latest_user_message: str
+    session_id: str = ""
+    history_window: list[SessionHistoryMessage] = field(default_factory=list)
+    prompt_history: list[PromptHistoryMessage] = field(default_factory=list)
+    turn_kind: TurnKind = "data_question"
+    intent: dict[str, Any] = field(default_factory=dict)
+    fast_path: str = ""
+    resolved_question: str = ""
+    prior_answer_verdict: PriorAnswerVerdict | None = None
+    graph_nodes: list[GraphNodeName] = field(default_factory=list)
+
+
+class PipelineRuntimeState(TypedDict, total=False):
+    question: str
+    provider_id: str
+    gating_mode: str
+    agent_state: AgentGraphState
+    intent: dict[str, Any]
+    intent_meta: dict[str, Any]
+    answer: str
+    stop_reason: str
+    prior_answer_verdict: PriorAnswerVerdict | None
+    tool_calls: list[Any]
+    bound_tools: list[str]
+    fast_path: str
+    iterations: int
+    intent_model_name: str
+    synthesis_model_name: str
+    intent_usage: Any
+    synthesis_usage: Any
 
 
 def load_session_context(store: Any, session_id: str, latest_user_message: str) -> AgentContext:
@@ -107,6 +166,9 @@ def resolve_follow_up_question(question: str, prompt_history: list[PromptHistory
     previous_assistant = _latest_message(prompt_history, role="assistant")
 
     if clean_lower in _AMBIGUOUS_PLANT_QUESTIONS and plant_name:
+        metric_anchor = _latest_metric_anchor(prompt_history, plant_name=plant_name)
+        if metric_anchor:
+            return f"{metric_anchor} Follow-up: {clean}"
         return f"How is {plant_name} doing?"
 
     if clean_lower.startswith(("and ", "what about ", "how about ")):
@@ -114,7 +176,7 @@ def resolve_follow_up_question(question: str, prompt_history: list[PromptHistory
         if anchor:
             return f"{anchor} Follow-up: {clean}"
 
-    if any(token in clean_lower for token in ("those", "that one", "same one", "previous", "earlier")):
+    if any(token in clean_lower for token in ("those", "that one", "that plant", "same one", "previous", "earlier", "again")):
         anchor_parts = [part for part in (previous_user, previous_assistant) if part]
         if anchor_parts:
             return " ".join([*anchor_parts, f"Follow-up question: {clean}"])
@@ -126,6 +188,11 @@ def resolve_follow_up_question(question: str, prompt_history: list[PromptHistory
     return clean
 
 
+def latest_metric_context(prompt_history: list[PromptHistoryMessage] | None, *, plant_name: str = "") -> str:
+    anchor = _latest_metric_anchor(prompt_history, plant_name=plant_name)
+    return anchor.lower()
+
+
 def last_assistant_message(history_window: list[SessionHistoryMessage] | None) -> SessionHistoryMessage | None:
     if not history_window:
         return None
@@ -133,6 +200,22 @@ def last_assistant_message(history_window: list[SessionHistoryMessage] | None) -
         if item.get("role") == "assistant":
             return item
     return None
+
+
+def _latest_metric_anchor(prompt_history: list[PromptHistoryMessage] | None, *, plant_name: str = "") -> str:
+    if not prompt_history:
+        return ""
+    for role in ("user", "assistant"):
+        for item in reversed(prompt_history):
+            if item.get("role") != role:
+                continue
+            content = str(item.get("content", "")).strip()
+            content_lower = content.lower()
+            if plant_name and plant_name.lower() not in content_lower:
+                continue
+            if any(cue in content_lower for cue in _METRIC_CONTEXT_CUES):
+                return content
+    return ""
 
 
 def build_prior_answer_verdict(
@@ -170,6 +253,174 @@ def build_prior_answer_verdict(
     if evidence_fingerprint:
         verdict["evidence_fingerprint_sha256"] = evidence_fingerprint
     return verdict
+
+
+def build_agent_graph_state(
+    latest_user_message: str,
+    *,
+    session_id: str = "",
+    session_store: Any | None = None,
+    history_window: list[SessionHistoryMessage] | None = None,
+    prompt_history: list[PromptHistoryMessage] | None = None,
+) -> AgentGraphState:
+    if session_id and session_store is not None and (history_window is None or prompt_history is None):
+        session_context = load_session_context(session_store, session_id, latest_user_message)
+        if history_window is None:
+            history_window = session_context["history_window"]
+        if prompt_history is None:
+            prompt_history = session_context["prompt_history"]
+    return AgentGraphState(
+        latest_user_message=latest_user_message,
+        session_id=session_id,
+        history_window=list(history_window or ()),
+        prompt_history=list(prompt_history or ()),
+    )
+
+
+def apply_turn_routing(
+    state: AgentGraphState,
+    *,
+    intent: dict[str, Any],
+    turn_kind: TurnKind,
+    fast_path: str = "",
+) -> AgentGraphState:
+    state.intent = intent
+    state.turn_kind = turn_kind
+    state.fast_path = fast_path
+    state.resolved_question = (
+        resolve_follow_up_question(state.latest_user_message, state.prompt_history)
+        if turn_kind == "follow_up"
+        else ""
+    )
+    state.graph_nodes = plan_graph_nodes(
+        turn_kind=turn_kind,
+        has_session_context=bool(state.session_id and (state.history_window or state.prompt_history)),
+        has_fast_path=bool(fast_path),
+        out_of_scope=bool(intent.get("out_of_scope")),
+        tool_free=turn_kind in {"smalltalk", "command", "clarification", "prior_answer_meta"},
+    )
+    return state
+
+
+def apply_prior_answer_verdict(
+    state: AgentGraphState,
+    *,
+    predicate_summary: str,
+    tool_calls: list[Any],
+) -> AgentGraphState:
+    state.prior_answer_verdict = build_prior_answer_verdict(
+        history_window=state.history_window,
+        predicate_summary=predicate_summary,
+        tool_calls=tool_calls,
+    )
+    return state
+
+
+def plan_graph_nodes(
+    *,
+    turn_kind: TurnKind,
+    has_session_context: bool,
+    has_fast_path: bool,
+    out_of_scope: bool,
+    tool_free: bool,
+) -> list[GraphNodeName]:
+    nodes: list[GraphNodeName] = []
+    if has_session_context:
+        nodes.append("load_session_context")
+    nodes.append("route_local")
+    if has_fast_path:
+        nodes.append("tool_free_reply")
+        return nodes
+    nodes.append("classify_intent")
+    if turn_kind == "follow_up":
+        nodes.append("resolve_follow_up")
+    if tool_free:
+        nodes.append("tool_free_reply")
+        return nodes
+    if out_of_scope:
+        nodes.append("out_of_scope_reply")
+        return nodes
+    nodes.append("run_tool_loop")
+    if turn_kind == "dispute_correction":
+        nodes.append("reconcile_prior_answer")
+    return nodes
+
+
+def compile_runtime_graph(
+    *,
+    load_session_context_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    route_local_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    classify_intent_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    tool_free_reply_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    out_of_scope_reply_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    run_tool_loop_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    reconcile_prior_answer_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+):
+    graph = StateGraph(PipelineRuntimeState)
+    graph.add_node("load_session_context", load_session_context_node)
+    graph.add_node("route_local", route_local_node)
+    graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("tool_free_reply", tool_free_reply_node)
+    graph.add_node("out_of_scope_reply", out_of_scope_reply_node)
+    graph.add_node("run_tool_loop", run_tool_loop_node)
+    graph.add_node("reconcile_prior_answer", reconcile_prior_answer_node)
+
+    graph.add_edge(START, "load_session_context")
+    graph.add_edge("load_session_context", "route_local")
+    graph.add_conditional_edges(
+        "route_local",
+        _route_after_local,
+        {
+            "tool_free_reply": "tool_free_reply",
+            "classify_intent": "classify_intent",
+        },
+    )
+    graph.add_conditional_edges(
+        "classify_intent",
+        _route_after_classify,
+        {
+            "tool_free_reply": "tool_free_reply",
+            "out_of_scope_reply": "out_of_scope_reply",
+            "run_tool_loop": "run_tool_loop",
+        },
+    )
+    graph.add_conditional_edges(
+        "run_tool_loop",
+        _route_after_tool_loop,
+        {
+            "reconcile_prior_answer": "reconcile_prior_answer",
+            "__end__": END,
+        },
+    )
+    graph.add_edge("tool_free_reply", END)
+    graph.add_edge("out_of_scope_reply", END)
+    graph.add_edge("reconcile_prior_answer", END)
+    return graph.compile()
+
+
+def _route_after_local(state: PipelineRuntimeState) -> str:
+    agent_state = state.get("agent_state")
+    if isinstance(agent_state, AgentGraphState) and agent_state.fast_path:
+        return "tool_free_reply"
+    return "classify_intent"
+
+
+def _route_after_classify(state: PipelineRuntimeState) -> str:
+    agent_state = state.get("agent_state")
+    if not isinstance(agent_state, AgentGraphState):
+        return "run_tool_loop"
+    if agent_state.turn_kind in {"smalltalk", "command", "clarification", "prior_answer_meta"}:
+        return "tool_free_reply"
+    if agent_state.turn_kind == "out_of_scope" and bool(state.get("intent", {}).get("out_of_scope")):
+        return "out_of_scope_reply"
+    return "run_tool_loop"
+
+
+def _route_after_tool_loop(state: PipelineRuntimeState) -> str:
+    agent_state = state.get("agent_state")
+    if isinstance(agent_state, AgentGraphState) and agent_state.turn_kind == "dispute_correction":
+        return "reconcile_prior_answer"
+    return "__end__"
 
 
 def _latest_message(prompt_history: list[PromptHistoryMessage] | None, *, role: str) -> str:

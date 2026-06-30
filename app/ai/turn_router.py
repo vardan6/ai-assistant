@@ -40,6 +40,8 @@ _DISPUTE_PATTERNS = (
     "your answer was wrong",
     "your previous answer was wrong",
     "that answer was wrong",
+    "that answer looks wrong",
+    "that answer seems wrong",
     "that was wrong",
     "that's wrong",
     "you are wrong",
@@ -51,6 +53,8 @@ _PRIOR_ANSWER_META_PATTERNS = (
     "what did you say",
     "what was your previous answer",
     "what was your last answer",
+    "what was that plant again",
+    "what was that inverter again",
     "was your previous answer right",
     "was your answer right",
     "did you answer",
@@ -110,7 +114,7 @@ def infer_turn_kind(
     prompt_history: list[dict[str, str]] | None = None,
 ) -> TurnKind:
     clean = str(question or "").strip().lower()
-    if any(pattern in clean for pattern in _DISPUTE_PATTERNS):
+    if _looks_like_dispute(clean):
         return "dispute_correction"
     if any(pattern in clean for pattern in _PRIOR_ANSWER_META_PATTERNS):
         return "prior_answer_meta"
@@ -156,3 +160,9 @@ def _looks_like_follow_up(clean: str, *, prompt_history: list[dict[str, str]] | 
     if re.fullmatch(r"(and|what about|how about)\b.*", clean):
         return True
     return bool(re.search(r"\b(previous|earlier|same one|that one|those)\b", clean))
+
+
+def _looks_like_dispute(clean: str) -> bool:
+    if any(pattern in clean for pattern in _DISPUTE_PATTERNS):
+        return True
+    return bool(re.search(r"\b(?:that|your|previous)\s+answer\s+(?:looks|seems)\s+wrong\b", clean))

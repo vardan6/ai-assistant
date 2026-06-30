@@ -27,7 +27,7 @@ const state = {
     },
   },
   selectedProviderId: "",
-  gatingMode: "bind_all",
+  gatingMode: "gated",
   sessionFilter: "active",
   sessionSearch: "",
   archivedSessionIds: new Set(),
@@ -782,7 +782,7 @@ async function initialize() {
   state.appearance = readStoredAppearance() || appearanceSettings;
   state.commands = Array.isArray(commandSettings.commands) ? commandSettings.commands : [];
   state.selectedProviderId = resolveStoredProviderSelection(storedUIState?.selectedProviderId);
-  state.gatingMode = "bind_all";
+  state.gatingMode = getDefaultGatingMode();
   state.sessionFilter = storedUIState?.sessionFilter === "archived" ? "archived" : "active";
   state.sessionSearch = String(storedUIState?.sessionSearch || "");
   state.archivedSessionIds = new Set(Array.isArray(storedUIState?.archivedSessionIds) ? storedUIState.archivedSessionIds : []);
@@ -1517,7 +1517,7 @@ async function saveUISettings() {
     method: "PUT",
     body: JSON.stringify(payload),
   });
-  state.gatingMode = "bind_all";
+  state.gatingMode = getDefaultGatingMode();
   renderUISettings();
   updateTraceNote();
   setStatus("Defaults saved");
@@ -2305,7 +2305,7 @@ function buildUIStateSnapshot() {
     subtab: getActiveSubtabName(),
     sessionId: state.sessionId || "",
     selectedProviderId: state.selectedProviderId || "",
-    gatingMode: "bind_all",
+    gatingMode: normalizeGatingMode(state.gatingMode),
     sessionFilter: state.sessionFilter || "active",
     sessionSearch: state.sessionSearch || "",
     archivedSessionIds: Array.from(state.archivedSessionIds),
@@ -2345,11 +2345,12 @@ function resolveStoredProviderSelection(providerId) {
   return state.providers.some((provider) => provider.id === providerId) ? providerId : "";
 }
 
-function resolveStoredGatingMode(storedMode, defaultMode) {
-  if (VALID_GATING_MODES.has(storedMode)) {
-    return storedMode;
-  }
-  return VALID_GATING_MODES.has(defaultMode) ? defaultMode : "gated";
+function normalizeGatingMode(mode) {
+  return VALID_GATING_MODES.has(mode) ? mode : "gated";
+}
+
+function getDefaultGatingMode() {
+  return normalizeGatingMode(state.ui?.default_gating_mode);
 }
 
 function resolveStoredProviderSort(snapshot) {
@@ -2617,10 +2618,10 @@ async function importConfigPayload() {
   });
   state.providers = response.llm_providers || [];
   state.modelRouting = response.model_routing || {};
-  state.ui = response.ui || state.ui;
+  state.ui = { ...state.ui, ...(response.ui || {}) };
   state.appearance = response.appearance || state.appearance;
   state.dataset = await api("/api/settings/dataset");
-  state.gatingMode = "bind_all";
+  state.gatingMode = getDefaultGatingMode();
   ensureProviderSelectionAfterRefresh();
   renderProviderControls();
   renderProviderSettings();

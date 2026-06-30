@@ -114,5 +114,3 @@ This drives the status vocabulary the test plan uses to report each spec item:
 - No production UI polish required by the spec (but see template goals — we build a real Web UI
   + CLI anyway for demo and template value).
 - No streaming requirement from the spec, auth, multi-user, real-time feeds, or model training.
-</content>
-</invoke>

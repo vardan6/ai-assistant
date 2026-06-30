@@ -172,6 +172,7 @@ def test_pipeline_smalltalk_fast_path_skips_provider_resolution(monkeypatch):
     assert result.answer.startswith("Hi!")
     assert result.fast_path == "smalltalk"
     assert result.intent_meta["turn_kind"] == "smalltalk"
+    assert result.intent_meta["graph_nodes"] == ["route_local", "tool_free_reply"]
     assert result.stop_reason == "fast_path"
     assert [event.kind for event in result.trace_events] == ["intent_started", "intent_finished"]
 
@@ -189,6 +190,7 @@ def test_pipeline_empty_prompt_fast_path_skips_provider_resolution(monkeypatch):
     assert result.answer == "Please ask a question about the solar operations dataset."
     assert result.fast_path == "empty"
     assert result.intent_meta["turn_kind"] == "command"
+    assert result.intent_meta["graph_nodes"] == ["route_local", "tool_free_reply"]
     assert result.intent_meta["parse_errors"] == ["empty prompt"]
     assert result.stop_reason == "fast_path"
 
@@ -432,4 +434,266 @@ def test_pipeline_emits_structured_prior_answer_verdict_for_dispute_turn(monkeyp
     assert result.prior_answer_verdict["entity_ids"][:4] == ["INV_4135001_09", "INV_4136001_08", "7", "55"]
     assert 55.0 in result.prior_answer_verdict["numbers"]
     assert result.prior_answer_verdict["evidence_fingerprint_sha256"] == "abc123"
+    assert result.intent_meta["graph_nodes"] == [
+        "route_local",
+        "classify_intent",
+        "run_tool_loop",
+        "reconcile_prior_answer",
+    ]
     assert [event.kind for event in result.trace_events][-1] == "reconciliation_finished"
+
+
+def test_pipeline_loads_session_context_from_store_when_session_id_is_provided(monkeypatch):
+    pipeline = Pipeline(load_config(), session_store=SimpleNamespace(
+        load_history_window=lambda session_id: [
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": "Rajasthan Solar Park has two open hotspot anomalies.",
+                "metadata": {
+                    "evidence_fingerprint": {
+                        "sha256": "abc123",
+                    }
+                },
+            }
+        ] if session_id == "session-123" else [],
+        load_prompt_history=lambda session_id: [
+            {"role": "user", "content": "How is Rajasthan Solar Park doing?"},
+            {"role": "assistant", "content": "Rajasthan Solar Park has two open hotspot anomalies."},
+        ] if session_id == "session-123" else [],
+    ))
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["C"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "anomalies",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Re-check hotspot anomalies",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    observed: dict[str, object] = {}
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+        observed["user_prompt"] = user_prompt
+        return AgentResult(
+            answer="Rajasthan Solar Park still has two open hotspot anomalies.",
+            tool_calls=[
+                ToolCallRecord(
+                    name="anomalies",
+                    args={"plant": "Rajasthan Solar Park", "status": "open", "anomaly_type": "hotspot"},
+                    result={
+                        "ok": True,
+                        "matched": 2,
+                        "matched_inverter_ids": ["INV_4135001_09", "INV_4136001_08"],
+                        "anomaly_ids": [7, 55],
+                    },
+                    iteration=1,
+                    latency_ms=10,
+                )
+            ],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer(
+        "How is the plant doing?",
+        session_id="session-123",
+    )
+
+    assert result.intent_meta["resolved_question"] == "How is Rajasthan Solar Park doing?"
+    assert result.intent_meta["graph_nodes"] == [
+        "load_session_context",
+        "route_local",
+        "classify_intent",
+        "resolve_follow_up",
+        "run_tool_loop",
+    ]
+    assert observed["user_prompt"] == "How is Rajasthan Solar Park doing?"
+    assert [event.kind for event in result.trace_events] == [
+        "intent_started",
+        "follow_up_resolved",
+        "intent_finished",
+        "synthesis_started",
+    ]
+
+
+def test_pipeline_replies_from_session_context_for_prior_answer_meta_turn(monkeypatch):
+    pipeline = Pipeline(load_config(), session_store=SimpleNamespace(
+        load_history_window=lambda session_id: [
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": "Rajasthan Solar Park is performing worst right now.",
+                "metadata": {},
+            }
+        ] if session_id == "session-123" else [],
+        load_prompt_history=lambda session_id: [
+            {"role": "user", "content": "Which plant is performing worst right now?"},
+            {"role": "assistant", "content": "Rajasthan Solar Park is performing worst right now."},
+        ] if session_id == "session-123" else [],
+    ))
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["B"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Recall the prior plant",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+
+    result = pipeline.answer("What was that plant again?", session_id="session-123")
+
+    assert result.answer == "That was Rajasthan Solar Park."
+    assert result.intent_meta["turn_kind"] == "prior_answer_meta"
+    assert result.stop_reason == "final_answer"
+
+
+def test_pipeline_backfills_metric_type_for_ambiguous_plant_follow_up(monkeypatch):
+    pipeline = Pipeline(load_config(), session_store=SimpleNamespace(
+        load_history_window=lambda session_id: [] if session_id == "session-123" else [],
+        load_prompt_history=lambda session_id: [
+            {"role": "user", "content": "Tell me about Rajasthan Solar Park's current performance ratio."},
+            {"role": "assistant", "content": "Rajasthan Solar Park has a current performance ratio of 0.9077."},
+        ] if session_id == "session-123" else [],
+    ))
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["A"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": "today",
+                    "metric": "",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Plant status follow-up",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    observed: dict[str, object] = {}
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+        observed["tool_names"] = tool_names
+        observed["user_prompt"] = user_prompt
+        return AgentResult(
+            answer="Rajasthan Solar Park is at 0.9077 performance ratio.",
+            tool_calls=[],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer("How is the plant doing?", session_id="session-123")
+
+    assert result.intent["types"] == ["A", "B"]
+    assert result.intent["metric"] == "performance_ratio"
+    assert result.intent_meta["resolved_question"] == (
+        "Tell me about Rajasthan Solar Park's current performance ratio. Follow-up: How is the plant doing?"
+    )
+    assert observed["user_prompt"] == result.intent_meta["resolved_question"]
+    assert "performance_ratio" in observed["tool_names"]
+
+
+def test_pipeline_backfills_static_lookup_type_for_nameplate_capacity(monkeypatch):
+    pipeline = Pipeline(load_config())
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["B"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Plant capacity lookup",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    observed: dict[str, object] = {}
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+        observed["tool_names"] = tool_names
+        return AgentResult(
+            answer="Gujarat Solar Farm has 18.5 MW of nameplate capacity.",
+            tool_calls=[],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer("What is the nameplate capacity of the Gujarat plant?")
+
+    assert result.intent["types"] == ["A", "B"]
+    assert "plants" in observed["tool_names"]

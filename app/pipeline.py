@@ -22,7 +22,17 @@ from .ai import (
     resolve_provider,
     run_agent_loop,
 )
-from .ai.agent_graph import build_prior_answer_verdict, resolve_follow_up_question, summarize_prompt_history
+from .ai.agent_graph import (
+    apply_prior_answer_verdict,
+    apply_turn_routing,
+    build_agent_graph_state,
+    compile_runtime_graph,
+    last_assistant_message,
+    latest_metric_context,
+    PipelineRuntimeState,
+    recent_plant_name,
+    summarize_prompt_history,
+)
 from .ai.agent_traces import make_trace_event
 from .ai.turn_router import build_tool_free_reply, infer_turn_kind, is_tool_free_turn, route_local_turn
 from .ai.usage_telemetry import model_name_from_model, utc_now_iso
@@ -114,9 +124,16 @@ class PipelineAnswer:
 class Pipeline:
     """Holds the loaded dataset + tool registry; one instance per process."""
 
-    def __init__(self, config: AppConfig, *, secret_resolver: Callable[[str], str] | None = None):
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        secret_resolver: Callable[[str], str] | None = None,
+        session_store: Any | None = None,
+    ):
         self._config = config
         self._secret_resolver = secret_resolver
+        self._session_store = session_store
         self._data = PandasDataSource(config.resolved_csv_paths())
         self._registry = build_registry()
         self._intent_service = IntentService()
@@ -161,200 +178,262 @@ class Pipeline:
             if event_handler is not None:
                 event_handler(event)
 
-        # 1) Local fast-paths must short-circuit before provider/model resolution.
-        emit(make_trace_event("intent_started", "Classifying intent"))
-        fast_path_env = route_local_turn(question, prompt_history=prompt_history)
-        if fast_path_env is not None:
+        def emit_graph_event(event: TraceEvent) -> None:
+            if event_handler is not None:
+                event_handler(event)
+
+        def graph_node(name: str, message: str, fn: Callable[[PipelineRuntimeState], dict[str, Any]]):
+            def wrapped(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+                emit_graph_event(make_trace_event("graph_node_started", message, details={"node": name}))
+                update = fn(runtime_state)
+                emit_graph_event(make_trace_event("graph_node_finished", message, details={"node": name}))
+                return update
+            return wrapped
+
+        def load_session_context_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = build_agent_graph_state(
+                runtime_state["question"],
+                session_id=session_id,
+                session_store=self._session_store,
+                history_window=history_window,
+                prompt_history=prompt_history,
+            )
+            return {"agent_state": agent_state}
+
+        def route_local_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = runtime_state["agent_state"]
+            emit(make_trace_event("intent_started", "Classifying intent"))
+            fast_path_env = route_local_turn(runtime_state["question"], prompt_history=agent_state.prompt_history)
+            if fast_path_env is None:
+                return {}
             intent = fast_path_env["intent"]
-            fast_path = fast_path_env["fast_path"]
-            turn_kind = fast_path_env["turn_kind"]
+            agent_state = apply_turn_routing(
+                agent_state,
+                intent=intent,
+                turn_kind=fast_path_env["turn_kind"],
+                fast_path=fast_path_env["fast_path"],
+            )
             intent_meta = {
                 "provider_name": "",
                 "latency_ms": 0,
                 "parse_errors": fast_path_env["parse_errors"],
-                "fast_path": fast_path,
-                "turn_kind": turn_kind,
-                "resolved_question": "",
+                "fast_path": agent_state.fast_path,
+                "turn_kind": agent_state.turn_kind,
+                "resolved_question": agent_state.resolved_question,
                 "session_id": session_id,
+                "graph_nodes": agent_state.graph_nodes,
             }
             emit(make_trace_event("intent_finished", "Intent classified", details={
                 "types": intent.get("types", []),
                 "metric": intent.get("metric", ""),
                 "out_of_scope": bool(intent.get("out_of_scope", False)),
-                "turn_kind": turn_kind,
-                "resolved_question": "",
+                "turn_kind": agent_state.turn_kind,
+                "resolved_question": agent_state.resolved_question,
             }))
-            return PipelineAnswer(
-                answer=build_tool_free_reply(turn_kind, fast_path=fast_path),
-                intent=intent,
-                intent_meta=intent_meta,
-                prior_answer_verdict=None,
-                trace_events=trace_events,
-                gating_mode=normalized_gating,
-                fast_path=fast_path,
-                stop_reason="final_answer" if fast_path == "ambiguous_plant" else "fast_path",
-                provider_id=provider_id,
-                telemetry=_telemetry(
-                    started_at=started_at,
-                    started=started,
-                    intent_model="",
-                    intent_usage=UsageSnapshot(),
-                ),
+            return {
+                "agent_state": agent_state,
+                "intent": intent,
+                "intent_meta": intent_meta,
+                "intent_usage": UsageSnapshot(),
+                "intent_model_name": "",
+                "fast_path": agent_state.fast_path,
+            }
+
+        def classify_intent_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = runtime_state["agent_state"]
+            intent_resolved = resolve_provider(
+                self._config, purpose="intent", provider_id=provider_id, secret_resolver=self._secret_resolver,
             )
+            intent_model = intent_resolved.model
+            context_summary = summarize_prompt_history(agent_state.prompt_history)
+            intent_env = self._intent_service.parse(runtime_state["question"], model=intent_model, context_summary=context_summary)
+            intent = intent_env["intent"]
+            fast_path = intent_env.get("fast_path", "")
+            turn_kind = infer_turn_kind(runtime_state["question"], intent=intent, prompt_history=agent_state.prompt_history)
+            intent = _backfill_static_lookup_intent(intent, question=runtime_state["question"])
+            if turn_kind == "follow_up":
+                intent = _backfill_follow_up_intent(
+                    intent,
+                    question=runtime_state["question"],
+                    prompt_history=agent_state.prompt_history,
+                )
+            agent_state = apply_turn_routing(agent_state, intent=intent, turn_kind=turn_kind, fast_path=fast_path)
+            intent_usage = UsageSnapshot(**intent_env.get("usage", {}))
+            intent_meta = {
+                "provider_name": intent_env.get("provider_name", ""),
+                "latency_ms": intent_env.get("latency_ms", 0),
+                "parse_errors": intent_env.get("parse_errors", []),
+                "fast_path": agent_state.fast_path,
+                "turn_kind": agent_state.turn_kind,
+                "resolved_question": agent_state.resolved_question,
+                "session_id": session_id,
+                "graph_nodes": agent_state.graph_nodes,
+            }
+            if agent_state.resolved_question:
+                emit(make_trace_event(
+                    "follow_up_resolved",
+                    "Resolved follow-up question against recent session context",
+                    details={"resolved_question": agent_state.resolved_question},
+                ))
+            emit(make_trace_event("intent_finished", "Intent classified", details={
+                "types": intent.get("types", []),
+                "metric": intent.get("metric", ""),
+                "out_of_scope": bool(intent.get("out_of_scope", False)),
+                "turn_kind": agent_state.turn_kind,
+                "resolved_question": agent_state.resolved_question,
+            }))
+            return {
+                "agent_state": agent_state,
+                "intent": intent,
+                "intent_meta": intent_meta,
+                "intent_usage": intent_usage,
+                "intent_model_name": model_name_from_model(intent_model),
+                "fast_path": agent_state.fast_path,
+            }
 
-        # 2) Intent classification (explicit + inspectable). Use the intent
-        #    routing purpose so a cheaper/local model can be used here later.
-        intent_resolved = resolve_provider(
-            self._config, purpose="intent", provider_id=provider_id,
-            secret_resolver=self._secret_resolver,
-        )
-        intent_model = intent_resolved.model
-        context_summary = summarize_prompt_history(prompt_history)
-        intent_env = self._intent_service.parse(question, model=intent_model, context_summary=context_summary)
-        intent = intent_env["intent"]
-        fast_path = intent_env.get("fast_path", "")
-        turn_kind = infer_turn_kind(question, intent=intent, prompt_history=prompt_history)
-        resolved_question = ""
-        if turn_kind == "follow_up":
-            resolved_question = resolve_follow_up_question(question, prompt_history)
-        intent_usage = UsageSnapshot(**intent_env.get("usage", {}))
-
-        intent_meta = {
-            "provider_name": intent_env.get("provider_name", ""),
-            "latency_ms": intent_env.get("latency_ms", 0),
-            "parse_errors": intent_env.get("parse_errors", []),
-            "fast_path": fast_path,
-            "turn_kind": turn_kind,
-            "resolved_question": resolved_question,
-            "session_id": session_id,
-        }
-        if resolved_question:
-            emit(make_trace_event(
-                "follow_up_resolved",
-                "Resolved follow-up question against recent session context",
-                details={"resolved_question": resolved_question},
-            ))
-        emit(make_trace_event("intent_finished", "Intent classified", details={
-            "types": intent.get("types", []),
-            "metric": intent.get("metric", ""),
-            "out_of_scope": bool(intent.get("out_of_scope", False)),
-            "turn_kind": turn_kind,
-            "resolved_question": resolved_question,
-        }))
-
-        # 3) Route tool-free branches before the data/tool path.
-        if is_tool_free_turn(turn_kind):
-            return PipelineAnswer(
-                answer=build_tool_free_reply(turn_kind, fast_path=fast_path),
-                intent=intent,
-                intent_meta=intent_meta,
-                prior_answer_verdict=None,
-                trace_events=trace_events,
-                gating_mode=normalized_gating,
-                fast_path=fast_path,
-                stop_reason="fast_path",
-                provider_id=provider_id,
-                telemetry=_telemetry(
-                    started_at=started_at,
-                    started=started,
-                    intent_model=model_name_from_model(intent_model),
-                    intent_usage=intent_usage,
-                ),
+        def tool_free_reply_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = runtime_state["agent_state"]
+            answer = (
+                _build_prior_answer_meta_reply(
+                    runtime_state["question"],
+                    prompt_history=agent_state.prompt_history,
+                    history_window=agent_state.history_window,
+                )
+                if agent_state.turn_kind == "prior_answer_meta"
+                else build_tool_free_reply(agent_state.turn_kind, fast_path=agent_state.fast_path)
             )
-
-        # 4) Explicit out-of-scope only short-circuits inside the data branch.
-        if turn_kind == "out_of_scope" and intent.get("out_of_scope") is True:
-            return PipelineAnswer(
-                answer=_build_out_of_scope_reply(intent),
-                intent=intent,
-                intent_meta=intent_meta,
-                prior_answer_verdict=None,
-                trace_events=trace_events,
-                gating_mode=normalized_gating,
-                fast_path=fast_path,
-                stop_reason="out_of_scope",
-                provider_id=provider_id,
-                telemetry=_telemetry(
-                    started_at=started_at,
-                    started=started,
-                    intent_model=model_name_from_model(intent_model),
-                    intent_usage=intent_usage,
-                ),
+            stop_reason = (
+                "final_answer"
+                if agent_state.turn_kind == "prior_answer_meta" or agent_state.fast_path == "ambiguous_plant"
+                else "fast_path"
             )
+            return {"answer": answer, "stop_reason": stop_reason, "fast_path": agent_state.fast_path}
 
-        # 5) Tool-calling loop for synthesis.
-        tool_names, used_gating_fallback = _select_tool_names(intent, gating_mode=normalized_gating, available_tools=self._registry.names())
-        if used_gating_fallback:
-            emit(make_trace_event(
-                "gating_fallback",
-                "Intent classification was empty; using the minimal safe tool subset",
-                details={"tool_names": tool_names, "gating_mode": normalized_gating},
-            ))
-        synth_resolved = resolve_provider(
-            self._config, purpose="synthesis", provider_id=provider_id,
-            secret_resolver=self._secret_resolver,
-        )
-        synth = synth_resolved.model
-        emit(make_trace_event("synthesis_started", "Starting synthesis", details={"tool_names": tool_names}))
-        result = run_agent_loop(
-            synth,
-            system_prompt=_build_synthesis_prompt(
-                self.dataset_today.isoformat(),
-                reference_now.isoformat(),
-                use_reference_now_anchor=self._config.use_reference_now_anchor,
-                schema_card=self._schema_card,
+        def out_of_scope_reply_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            return {
+                "answer": _build_out_of_scope_reply(runtime_state["intent"]),
+                "stop_reason": "out_of_scope",
+                "fast_path": runtime_state["agent_state"].fast_path,
+            }
+
+        def run_tool_loop_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = runtime_state["agent_state"]
+            intent = runtime_state["intent"]
+            tool_names, used_gating_fallback = _select_tool_names(
+                intent,
+                gating_mode=normalized_gating,
+                available_tools=self._registry.names(),
+            )
+            if used_gating_fallback:
+                emit(make_trace_event(
+                    "gating_fallback",
+                    "Intent classification was empty; using the minimal safe tool subset",
+                    details={"tool_names": tool_names, "gating_mode": normalized_gating},
+                ))
+            synth_resolved = resolve_provider(
+                self._config, purpose="synthesis", provider_id=provider_id, secret_resolver=self._secret_resolver,
+            )
+            synth = synth_resolved.model
+            emit(make_trace_event("synthesis_started", "Starting synthesis", details={"tool_names": tool_names}))
+            result = run_agent_loop(
+                synth,
+                system_prompt=_build_synthesis_prompt(
+                    self.dataset_today.isoformat(),
+                    reference_now.isoformat(),
+                    use_reference_now_anchor=self._config.use_reference_now_anchor,
+                    schema_card=self._schema_card,
+                    intent=intent,
+                ),
+                user_prompt=agent_state.resolved_question or runtime_state["question"],
+                registry=self._registry,
+                context=ToolContext(data=self._data, reference_now=lambda: reference_now),
+                tool_names=tool_names,
+                event_handler=emit,
+            )
+            answer = _maybe_override_weather_answer(
+                answer=result.answer,
+                question=agent_state.resolved_question or runtime_state["question"],
                 intent=intent,
-            ),
-            user_prompt=resolved_question or question,
-            registry=self._registry,
-            context=ToolContext(data=self._data, reference_now=lambda: reference_now),
-            tool_names=tool_names,
-            event_handler=emit,
-        )
-        answer = result.answer
-        if result.stop_reason == "iteration_limit" and not answer.strip():
-            answer = _ITERATION_LIMIT_REPLY
-            emit(make_trace_event(
-                "synthesis_degraded",
-                "Synthesis stopped at the iteration limit",
-                details={"stop_reason": result.stop_reason},
-            ))
-        prior_answer_verdict = None
-        if turn_kind == "dispute_correction":
-            prior_answer_verdict = build_prior_answer_verdict(
-                history_window=history_window,
-                predicate_summary=resolved_question or question,
                 tool_calls=result.tool_calls,
+                use_reference_now_anchor=self._config.use_reference_now_anchor,
+                plant_name_for_id=lambda plant_id: _plant_name_for_id(self._data, plant_id),
             )
-            emit(make_trace_event(
-                "reconciliation_finished",
-                "Re-checked the prior answer against fresh tool evidence",
-                details={
-                    "status": prior_answer_verdict.get("status", ""),
-                    "referenced_message_id": prior_answer_verdict.get("referenced_message_id", 0),
-                    "tool_names": prior_answer_verdict.get("tool_names", []),
-                },
-            ))
+            if result.stop_reason == "iteration_limit" and not answer.strip():
+                answer = _ITERATION_LIMIT_REPLY
+                emit(make_trace_event(
+                    "synthesis_degraded",
+                    "Synthesis stopped at the iteration limit",
+                    details={"stop_reason": result.stop_reason},
+                ))
+            return {
+                "answer": answer,
+                "stop_reason": result.stop_reason,
+                "tool_calls": result.tool_calls,
+                "bound_tools": tool_names,
+                "iterations": result.iterations,
+                "synthesis_usage": result.usage,
+                "synthesis_model_name": result.model_name or model_name_from_model(synth),
+                "fast_path": agent_state.fast_path,
+            }
+
+        def reconcile_prior_answer_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = apply_prior_answer_verdict(
+                runtime_state["agent_state"],
+                predicate_summary=runtime_state["agent_state"].resolved_question or runtime_state["question"],
+                tool_calls=runtime_state.get("tool_calls", []),
+            )
+            prior_answer_verdict = agent_state.prior_answer_verdict
+            if prior_answer_verdict is not None:
+                emit(make_trace_event(
+                    "reconciliation_finished",
+                    "Re-checked the prior answer against fresh tool evidence",
+                    details={
+                        "status": prior_answer_verdict.get("status", ""),
+                        "referenced_message_id": prior_answer_verdict.get("referenced_message_id", 0),
+                        "tool_names": prior_answer_verdict.get("tool_names", []),
+                    },
+                ))
+            return {"agent_state": agent_state, "prior_answer_verdict": prior_answer_verdict}
+
+        runtime = compile_runtime_graph(
+            load_session_context_node=graph_node("load_session_context", "Loading session context", load_session_context_node),
+            route_local_node=graph_node("route_local", "Routing local fast-paths", route_local_node),
+            classify_intent_node=graph_node("classify_intent", "Classifying intent and turn kind", classify_intent_node),
+            tool_free_reply_node=graph_node("tool_free_reply", "Producing tool-free reply", tool_free_reply_node),
+            out_of_scope_reply_node=graph_node("out_of_scope_reply", "Producing out-of-scope reply", out_of_scope_reply_node),
+            run_tool_loop_node=graph_node("run_tool_loop", "Running synthesis tool loop", run_tool_loop_node),
+            reconcile_prior_answer_node=graph_node(
+                "reconcile_prior_answer",
+                "Reconciling prior answer against fresh evidence",
+                reconcile_prior_answer_node,
+            ),
+        )
+        runtime_state = runtime.invoke({
+            "question": question,
+            "provider_id": provider_id,
+            "gating_mode": normalized_gating,
+        })
+        agent_state = runtime_state["agent_state"]
         return PipelineAnswer(
-            answer=answer,
-            intent=intent,
-            intent_meta=intent_meta,
-            prior_answer_verdict=prior_answer_verdict,
-            tool_calls=result.tool_calls,
+            answer=runtime_state.get("answer", ""),
+            intent=runtime_state.get("intent", {}),
+            intent_meta=runtime_state.get("intent_meta", {}),
+            prior_answer_verdict=runtime_state.get("prior_answer_verdict"),
+            tool_calls=list(runtime_state.get("tool_calls", [])),
             trace_events=trace_events,
             gating_mode=normalized_gating,
-            bound_tools=tool_names,
-            fast_path=fast_path,
-            iterations=result.iterations,
-            stop_reason=result.stop_reason,
+            bound_tools=list(runtime_state.get("bound_tools", [])),
+            fast_path=agent_state.fast_path,
+            iterations=int(runtime_state.get("iterations", 0)),
+            stop_reason=str(runtime_state.get("stop_reason", "")),
             provider_id=provider_id,
             telemetry=_telemetry(
                 started_at=started_at,
                 started=started,
-                intent_model=model_name_from_model(intent_model),
-                synthesis_model=result.model_name or model_name_from_model(synth),
-                intent_usage=intent_usage,
-                synthesis_usage=result.usage,
+                intent_model=str(runtime_state.get("intent_model_name", "")),
+                synthesis_model=str(runtime_state.get("synthesis_model_name", "")),
+                intent_usage=runtime_state.get("intent_usage", UsageSnapshot()),
+                synthesis_usage=runtime_state.get("synthesis_usage", UsageSnapshot()),
             ),
         )
 
@@ -396,6 +475,75 @@ def _select_metric_tools(intent: dict[str, Any]) -> set[str]:
     if "performing worst" in summary or "performing best" in summary:
         return {"performance_ratio"}
     return set()
+
+
+def _backfill_follow_up_intent(
+    intent: dict[str, Any],
+    *,
+    question: str,
+    prompt_history: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    clean = str(question or "").strip().lower()
+    if clean not in {"how is the plant doing?", "how is the plant doing"}:
+        return intent
+
+    metric_context = latest_metric_context(prompt_history, plant_name=recent_plant_name(prompt_history))
+    if not metric_context:
+        return intent
+
+    patched = dict(intent)
+    types = [str(value) for value in patched.get("types", []) if str(value)]
+    if "B" not in types:
+        patched["types"] = [*types, "B"]
+
+    if not str(patched.get("metric") or "").strip():
+        if "performance ratio" in metric_context:
+            patched["metric"] = "performance_ratio"
+        elif "yield" in metric_context or "energy" in metric_context:
+            patched["metric"] = "daily_yield"
+        elif "weather" in metric_context or "cloud cover" in metric_context:
+            patched["metric"] = "weather"
+        elif "feed-in tariff" in metric_context or "feed in tariff" in metric_context:
+            patched["metric"] = "tariff_usd_per_kwh"
+        elif "mean time" in metric_context or "mttr" in metric_context:
+            patched["metric"] = "mttr"
+
+    return patched
+
+
+def _backfill_static_lookup_intent(intent: dict[str, Any], *, question: str) -> dict[str, Any]:
+    clean = str(question or "").strip().lower()
+    if "nameplate capacity" not in clean:
+        return intent
+
+    patched = dict(intent)
+    types = [str(value) for value in patched.get("types", []) if str(value)]
+    if "A" not in types:
+        patched["types"] = ["A", *types]
+    return patched
+
+
+def _build_prior_answer_meta_reply(
+    question: str,
+    *,
+    prompt_history: list[dict[str, str]] | None,
+    history_window: list[dict[str, Any]] | None,
+) -> str:
+    clean = str(question or "").strip().lower()
+    plant_name = recent_plant_name(prompt_history)
+    if "plant" in clean and plant_name:
+        return f"That was {plant_name}."
+
+    last_answer = last_assistant_message(history_window)
+    if last_answer is not None:
+        content = str(last_answer.get("content", "")).strip()
+        if content:
+            return content
+
+    return (
+        "I couldn't find a prior answer in this session. Restate the data question "
+        "you want me to check."
+    )
 
 
 def _build_question_guidance(intent: dict[str, Any]) -> str:
@@ -459,6 +607,100 @@ def _build_out_of_scope_reply(intent: dict[str, Any]) -> str:
             "inputs needed for that number, such as contractual downtime assumptions or lost-energy valuation."
         )
     return _OUT_OF_SCOPE_REPLY
+
+
+def _maybe_override_weather_answer(
+    *,
+    answer: str,
+    question: str,
+    intent: dict[str, Any],
+    tool_calls: list[ToolCallRecord],
+    use_reference_now_anchor: bool,
+    plant_name_for_id: Callable[[Any], str | None],
+) -> str:
+    if not use_reference_now_anchor or not _is_anchored_weather_snapshot_question(question, intent):
+        return answer
+
+    latest_reading, latest_timestamp = _latest_weather_snapshot(tool_calls)
+    if latest_reading is None:
+        return answer
+
+    return _render_weather_snapshot_answer(
+        latest_reading=latest_reading,
+        latest_timestamp=latest_timestamp,
+        plant_name=plant_name_for_id(latest_reading.get("plant_id")),
+    )
+
+
+def _is_anchored_weather_snapshot_question(question: str, intent: dict[str, Any]) -> bool:
+    clean = str(question or "").strip().lower()
+    if not any(token in clean for token in ("today", "now", "right now", "current", "snapshot")):
+        return False
+
+    metric = str(intent.get("metric") or "").strip().lower()
+    summary = str(intent.get("summary") or "").strip().lower()
+    if metric == "weather" or "weather" in summary:
+        return True
+    return any(token in clean for token in ("weather", "temperature", "irradiation", "wind", "humidity", "rainfall", "cloud"))
+
+
+def _latest_weather_snapshot(tool_calls: list[ToolCallRecord]) -> tuple[dict[str, Any] | None, str]:
+    for call in reversed(tool_calls):
+        if call.name != "weather_readings":
+            continue
+        result = call.result if isinstance(call.result, dict) else {}
+        latest_reading = result.get("latest_reading")
+        if not isinstance(latest_reading, dict) or not latest_reading:
+            continue
+        if str(result.get("aggregate_by") or "overall").strip().lower() != "overall":
+            continue
+        return latest_reading, str(result.get("latest_timestamp") or latest_reading.get("timestamp") or "").strip()
+    return None, ""
+
+
+def _render_weather_snapshot_answer(
+    *,
+    latest_reading: dict[str, Any],
+    latest_timestamp: str,
+    plant_name: str | None,
+) -> str:
+    site = plant_name or f"Plant {latest_reading.get('plant_id')}"
+    metrics = [
+        ("ambient", latest_reading.get("ambient_temp"), "C"),
+        ("module", latest_reading.get("module_temp"), "C"),
+        ("irradiation", latest_reading.get("irradiation"), "W/m2"),
+        ("POA", latest_reading.get("poa_irradiance"), "W/m2"),
+        ("wind", latest_reading.get("wind_speed"), "m/s"),
+        ("humidity", latest_reading.get("humidity"), "%"),
+        ("cloud cover", latest_reading.get("cloud_cover_pct"), "%"),
+        ("rainfall", latest_reading.get("rainfall_mm"), "mm"),
+    ]
+    details = ", ".join(
+        f"{label} {_format_weather_value(value)} {unit}"
+        for label, value, unit in metrics
+        if _format_weather_value(value)
+    )
+    timestamp_note = f" at {latest_timestamp}" if latest_timestamp else ""
+    return f"{site} weather snapshot{timestamp_note}: {details}."
+
+
+def _format_weather_value(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def _plant_name_for_id(data: PandasDataSource, plant_id: Any) -> str | None:
+    if plant_id is None:
+        return None
+    plants = data.table("plants")
+    matches = plants[plants["plant_id"].astype(str) == str(plant_id)]
+    if matches.empty:
+        return None
+    return str(matches.iloc[0]["name"]).strip() or None
 
 def _telemetry(
     *,

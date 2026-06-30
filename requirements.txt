@@ -1,5 +1,5 @@
-# Conversational AI assistant — pipeline dependencies.
-# Phase 0 needs pandas (data layer) + langchain (provider + tool-calling loop).
+# Conversational AI assistant runtime dependencies.
+# Test-only dependencies live in requirements-dev.txt.
 pandas
 langchain
 langchain-core

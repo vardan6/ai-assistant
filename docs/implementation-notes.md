@@ -12,6 +12,9 @@
   authoritative for null-vs-zero columns (e.g. `performance_ratio` empty ⟺ no power → filter, never
   zero-fill), lifecycle nulls (`resolved_at`/`downtime_minutes` only on resolved alerts), and
   silent-downtime inverters. Aggregation tools must honour these or numbers will be wrong.
+- **Silent inverter detection is generation-feed recency, not status text.** For I4/current-state
+  questions, an inverter is silent when its latest `generation_readings.timestamp` is earlier than
+  `effective_now` (normally the dataset anchor), regardless of the `inverters.status` string.
 - **Profiler doubles as the tool-design oracle.** Beyond validation, `docs/dataset-analysis.md`
   carries the entity resolver index, vocabulary coverage map (exact stored strings for every demo
   filter word — `in_progress` not "in progress", `region` is a compass label not the state), the
@@ -30,4 +33,3 @@
 - **Dataset reloads are atomic for new requests only.** Rebuild the pipeline only after validating
   the full resolved dataset; keep the old pipeline alive for in-flight requests and on failed
   reload attempts.
-</content>
