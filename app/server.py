@@ -39,6 +39,18 @@ from .provider_config import (
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MANAGED_DATASET_ROOT = ROOT_DIR / "data" / "managed_datasets"
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers.update(NO_CACHE_HEADERS)
+        return response
 
 
 class ChatRequest(BaseModel):
@@ -174,7 +186,7 @@ def create_app(
     secret_store: SecretStore | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Solar AI Assistant", version="0.1.0")
-    app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
+    app.mount("/assets", NoCacheStaticFiles(directory=WEB_DIR / "assets"), name="assets")
     cfg = config or load_config()
     secrets = secret_store or SecretStore(cfg.llm_secrets_db_path)
     sessions = session_store or SessionStore(cfg.ai_sessions_db_path)
@@ -241,7 +253,11 @@ def create_app(
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(WEB_DIR / "index.html")
+        return FileResponse(WEB_DIR / "index.html", headers=NO_CACHE_HEADERS)
+
+    @app.head("/")
+    def index_head() -> Response:
+        return Response(headers=NO_CACHE_HEADERS)
 
     @app.get("/favicon.ico")
     def favicon() -> Response:

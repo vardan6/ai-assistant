@@ -551,7 +551,9 @@ function wireEvents() {
     });
   });
   dom.copySessionButton.addEventListener("click", (event) => {
-    copyCurrentTranscript({ includeToolDetail: event.shiftKey }).catch((error) => {
+    event.preventDefault();
+    event.stopPropagation();
+    copyCurrentTranscript({ includeToolDetail: shouldCopyWithToolDetails(event) }).catch((error) => {
       console.error(error);
       setStatus(error.message || "Copy failed.");
     });
@@ -567,7 +569,7 @@ function wireEvents() {
       if (!actionButton) {
         return;
       }
-      handleMessageAction(actionButton.dataset.messageAction, Number(actionButton.dataset.messageIndex), event.shiftKey).catch((error) => {
+      handleMessageAction(actionButton.dataset.messageAction, Number(actionButton.dataset.messageIndex), shouldCopyWithToolDetails(event)).catch((error) => {
         console.error(error);
         setStatus(error.message || "Message action failed.");
       });
@@ -947,12 +949,14 @@ function renderMessages() {
   dom.messages.innerHTML = "";
   if (state.messages.length === 0) {
     dom.messages.appendChild(dom.emptyStateTemplate.content.cloneNode(true));
+    updateComposerState();
     return;
   }
   state.messages.forEach((message, index) => {
     dom.messages.appendChild(renderMessageCard(message, index));
   });
   dom.messages.scrollTop = dom.messages.scrollHeight;
+  updateComposerState();
 }
 
 function renderMessageCard(message, index) {
@@ -969,7 +973,7 @@ function renderMessageCard(message, index) {
         <button class="icon-button icon-button-xs" type="button" data-message-action="retry" data-message-index="${index}" title="Retry from last user prompt" aria-label="Retry from last user prompt">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v4H4l5 5 5-5h-4V5H8Zm8 10v4h-4l5 5 5-5h-4v-4h-2Zm-7.5 1.5L4 12l1.5-1.5L10 15l-1.5 1.5Z"/></svg>
         </button>
-        <button class="icon-button icon-button-xs" type="button" data-message-action="copy" data-message-index="${index}" title="Copy message (Shift+click to include tool details)" aria-label="Copy message">
+        <button class="icon-button icon-button-xs" type="button" data-message-action="copy" data-message-index="${index}" title="Copy message (Shift/Ctrl/Cmd-click to include agent activity and tool internals)" aria-label="Copy message">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1Zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H10V7h9v14Z"/></svg>
         </button>
       </div>
@@ -1808,17 +1812,20 @@ async function copyCurrentTranscript(options = {}) {
   if (!state.messages.length) {
     return;
   }
-  const transcript = serializeConversationToMarkdown(options);
   const includeToolDetail = Boolean(options.includeToolDetail);
+  const transcript = buildCopyPayload(() => serializeConversationToMarkdown(options), {
+    fallback: () => serializeConversationPlainText({ includeToolDetail }),
+    context: "session transcript",
+  });
   try {
     await writeClipboardText(transcript);
     flashCopyFeedback(dom.copySessionButton, {
       defaultTitle: "Copy transcript",
-      activeTitle: includeToolDetail ? "Copied (with tools)" : "Copied transcript",
+      activeTitle: includeToolDetail ? "Copied (with diagnostics)" : "Copied transcript",
       defaultLabel: "Copy transcript",
-      activeLabel: includeToolDetail ? "Copied (with tools)" : "Copied transcript",
+      activeLabel: includeToolDetail ? "Copied (with diagnostics)" : "Copied transcript",
     });
-    setStatus(includeToolDetail ? "Transcript copied (with tool details)" : "Transcript copied");
+    setStatus(includeToolDetail ? "Transcript copied (with diagnostics)" : "Transcript copied");
   } catch (error) {
     downloadTranscriptFallback(transcript);
     setStatus("Clipboard blocked. Transcript downloaded as markdown.");
@@ -1882,7 +1889,7 @@ async function deleteSessionById(sessionId) {
   setStatus("Chat deleted");
 }
 
-async function handleMessageAction(action, index, shiftKey = false) {
+async function handleMessageAction(action, index, includeToolDetail = false) {
   const message = state.messages[index];
   if (!message) {
     return;
@@ -1897,8 +1904,24 @@ async function handleMessageAction(action, index, shiftKey = false) {
     return;
   }
   if (action === "copy") {
-    await writeClipboardText(serializeMessageToMarkdown(message, index, { includeHeading: true, includeToolDetail: shiftKey }));
-    setStatus(shiftKey ? "Message copied (with tool details)" : "Message copied");
+    await writeClipboardText(serializeMessageToMarkdown(message, index, { includeHeading: true, includeToolDetail }));
+    setStatus(includeToolDetail ? "Message copied (with diagnostics)" : "Message copied");
+  }
+}
+
+function shouldCopyWithToolDetails(event) {
+  return Boolean(event?.shiftKey || event?.ctrlKey || event?.metaKey);
+}
+
+function buildCopyPayload(serializer, options = {}) {
+  try {
+    return serializer();
+  } catch (error) {
+    console.warn(`Failed to serialize ${options.context || "copy payload"}; using plain text fallback.`, error);
+    if (typeof options.fallback === "function") {
+      return options.fallback();
+    }
+    return "";
   }
 }
 
@@ -3478,6 +3501,33 @@ function serializeConversationToMarkdown(options = {}) {
   return lines.join("\n").trim();
 }
 
+function serializeConversationPlainText(options = {}) {
+  const includeToolDetail = Boolean(options.includeToolDetail);
+  const session = state.sessions.find((item) => item.id === state.sessionId);
+  const title = session?.title || dom.chatTitle?.textContent?.trim() || "New chat";
+  const lines = [`# Chat: ${title}`];
+
+  state.messages.forEach((message, index) => {
+    if (!message || (message.role !== "user" && message.role !== "assistant")) {
+      return;
+    }
+    const role = message.role === "assistant" ? "Assistant" : "User";
+    const body = resolvePlainMessageCopyBody(message, index);
+    if (!body && !message.metadata) {
+      return;
+    }
+    lines.push("", `## ${role}`, "");
+    if (body) {
+      lines.push(body);
+    }
+    if (includeToolDetail && message.metadata && Object.keys(message.metadata).length) {
+      lines.push("", "### Diagnostics", "", "```json", safeCopyJson(message.metadata), "```");
+    }
+  });
+
+  return lines.join("\n").trim();
+}
+
 function serializeMessageToMarkdown(message, index, options = {}) {
   const includeHeading = Boolean(options.includeHeading);
   const includeToolDetail = Boolean(options.includeToolDetail);
@@ -3496,7 +3546,7 @@ function serializeMessageToMarkdown(message, index, options = {}) {
 
   if (message.role === "assistant") {
     const metadata = message.metadata || {};
-    const showActivity = (state.ui.verbose_trace && isAgentActivityOpen(message, index)) || includeToolDetail;
+    const showActivity = includeToolDetail;
     if (showActivity && shouldRenderAgentActivity(metadata)) {
       lines.push("", serializeAgentActivityToMarkdown(metadata, { includeToolDetail }));
     }
@@ -3557,6 +3607,44 @@ function resolveMessageCopyBody(message, index = -1) {
     }
   }
   return readRenderedMessageContent(index);
+}
+
+function resolvePlainMessageCopyBody(message, index = -1) {
+  const content = message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((item) => resolvePlainCopyValue(item)).filter(Boolean).join("\n");
+  }
+  if (content && typeof content === "object") {
+    return resolvePlainCopyValue(content);
+  }
+  return readRenderedMessageContent(index);
+}
+
+function resolvePlainCopyValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  if (typeof value.text === "string") {
+    return value.text;
+  }
+  if (typeof value.content === "string") {
+    return value.content;
+  }
+  return safeCopyJson(value);
+}
+
+function safeCopyJson(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value ?? "");
+  }
 }
 
 function readRenderedMessageContent(index) {
@@ -3690,8 +3778,12 @@ function formatActivityToolMarkdown(tool, options = {}) {
   Object.entries(tool.args || {}).forEach(([key, value]) => {
     parts.push(`${key}: ${summarizeActivityValue(value)}`);
   });
+  const resultStatus = includeToolDetail ? summarizeActivityToolResultStatus(tool) : "";
+  if (resultStatus) {
+    parts.push(resultStatus);
+  }
   const resultKeys = Object.keys(tool.result || {});
-  if (resultKeys.length > 0) {
+  if (!includeToolDetail && resultKeys.length > 0) {
     parts.push(resultKeys.join(", "));
   }
   if (tool.pending) {
@@ -3704,14 +3796,37 @@ function formatActivityToolMarkdown(tool, options = {}) {
   if (includeToolDetail) {
     const hasArgs = tool.args && Object.keys(tool.args).length > 0;
     const hasResult = !tool.pending && tool.result && Object.keys(tool.result).length > 0;
+    if (resultKeys.length > 0) {
+      base += `\n\n  Returned: ${resultKeys.map((key) => `\`${key}\``).join(", ")}`;
+    }
     if (hasArgs) {
-      base += `\n  **Arguments:**\n\`\`\`json\n${prettyToolJson(tool.args, 2400)}\n\`\`\``;
+      base += `\n\n  **Arguments:**\n\n  \`\`\`json\n${indentMarkdownBlock(prettyToolJson(tool.args, 2400), "  ")}\n  \`\`\``;
     }
     if (hasResult) {
-      base += `\n  **Result:**\n\`\`\`json\n${prettyToolJson(tool.result)}\n\`\`\``;
+      base += `\n\n  **Result:**\n\n  \`\`\`json\n${indentMarkdownBlock(prettyToolJson(tool.result), "  ")}\n  \`\`\``;
     }
   }
   return base;
+}
+
+function summarizeActivityToolResultStatus(tool) {
+  if (tool.pending || !tool.result || typeof tool.result !== "object") {
+    return "";
+  }
+  if (typeof tool.result.ok === "boolean") {
+    return tool.result.ok ? "ok" : "not ok";
+  }
+  if (typeof tool.result.error === "string" && tool.result.error.trim()) {
+    return "error";
+  }
+  return "";
+}
+
+function indentMarkdownBlock(value, prefix = "  ") {
+  return String(value || "")
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
 }
 
 function serializeAssistantStatsToMarkdown(message) {

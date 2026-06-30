@@ -78,6 +78,14 @@ This drives the status vocabulary the test plan uses to report each spec item:
   timestamp** (~2026-06-22), NOT wall-clock time. The CSVs are the full dataset.
 - Agent operates in a single mode (**agent mode only**; no separate chat mode).
 - Greetings/smalltalk short-circuit before the LLM/tools (fast-path).
+- Conversation is part of the task state. Follow-up questions, corrections,
+  and challenges to earlier answers must be resolved against prior turns when a
+  session is available; they must not be treated as unrelated standalone dataset
+  prompts.
+- Generic dataset refusals apply only to genuinely unanswerable dataset
+  requests. Meta-conversation turns such as "your previous answer was wrong"
+  should inspect/reconcile prior conversation state instead of using the
+  out-of-scope refusal path.
 
 ## Dataset configuration behavior
 

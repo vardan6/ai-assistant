@@ -1481,42 +1481,68 @@ details.trace-tool-card[open] > .trace-tool-summary::after {
 }
 
 .settings-tabbar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
-  gap: 0;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 24px;
-  background: var(--panel);
-  border-radius: var(--radius) var(--radius) 0 0;
-  overflow: hidden;
+  gap: 4px;
+  align-items: flex-end;
+  margin: 0;
+  padding: 6px 10px 0;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 98%, white 2%), color-mix(in srgb, var(--panel) 94%, var(--bg) 6%));
+  box-shadow: 0 10px 24px rgba(31, 35, 40, 0.035);
+  z-index: 2;
 }
 
 .subtab {
-  border: 0;
-  border-bottom: 2px solid transparent;
+  position: relative;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  padding: 14px 20px;
+  padding: 10px 16px 13px;
+  border-radius: 14px 14px 0 0;
   cursor: pointer;
   font-size: 0.95rem;
-  margin-bottom: -1px;
+  font-weight: 500;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
 
 .subtab:hover {
   color: var(--ink);
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent-soft) 48%, transparent 52%);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent 84%);
 }
 
 .subtab.is-active {
   color: var(--ink);
-  border-bottom-color: var(--accent-deep);
+  background: color-mix(in srgb, var(--panel-strong) 97%, var(--accent-soft) 3%);
+  border-color: var(--line);
+  border-bottom-color: transparent;
+  box-shadow: 0 -1px 0 color-mix(in srgb, white 72%, transparent 28%) inset;
   font-weight: 600;
+  z-index: 3;
+}
+
+.subtab.is-active::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -9px;
+  height: 10px;
+  background: color-mix(in srgb, var(--panel-strong) 97%, var(--accent-soft) 3%);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
 }
 
 .settings-content {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 0;
+  padding-top: 0;
 }
 
 .subview {
@@ -1530,17 +1556,21 @@ details.trace-tool-card[open] > .trace-tool-summary::after {
 .provider-col {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 
 .appearance-reference-card {
-  padding: 24px;
+  margin-top: 0;
+  padding: 16px 18px 18px;
   border: 1px solid var(--line);
-  border-radius: 28px;
-  background: color-mix(in srgb, var(--panel) 94%, white 6%);
+  border-top: 0;
+  border-radius: 0 0 18px 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 97%, var(--accent-soft) 3%), color-mix(in srgb, var(--panel) 94%, var(--bg) 6%));
+  box-shadow: 0 14px 34px rgba(31, 35, 40, 0.045);
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 16px;
 }
 
 .appearance-heading {
@@ -1553,11 +1583,12 @@ details.trace-tool-card[open] > .trace-tool-summary::after {
 .appearance-badge {
   display: inline-flex;
   align-items: center;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--panel-strong) 92%, white 8%);
   color: var(--muted);
   border: 1px solid var(--line);
+  font-size: 0.88rem;
 }
 
 .appearance-field {
@@ -1569,17 +1600,18 @@ details.trace-tool-card[open] > .trace-tool-summary::after {
 }
 
 .appearance-field select {
-  min-height: 62px;
-  border-radius: 22px;
+  min-height: 54px;
+  border-radius: 14px;
   font-size: 1rem;
   background: color-mix(in srgb, var(--panel-strong) 96%, white 4%);
 }
 
 .placeholder-panel {
-  padding: 28px;
+  padding: 16px 18px 18px;
   border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--placeholder-bg);
+  border-top: 0;
+  border-radius: 0 0 18px 18px;
+  background: color-mix(in srgb, var(--panel-strong) 92%, var(--placeholder-bg) 8%);
 }
 
 .placeholder-panel h2 {
@@ -1615,10 +1647,73 @@ details.trace-tool-card[open] > .trace-tool-summary::after {
 .routing-card,
 .provider-settings-card {
   border: 1px solid var(--line);
-  border-radius: 22px;
-  background: color-mix(in srgb, var(--panel-strong) 96%, white 4%);
-  padding: 18px 20px;
-  box-shadow: 0 10px 28px rgba(31, 35, 40, 0.04);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 97%, white 3%), color-mix(in srgb, var(--panel) 94%, var(--bg) 6%));
+  padding: 18px;
+  box-shadow: 0 14px 34px rgba(31, 35, 40, 0.045);
+}
+
+#subtab-ai > .section-head,
+#subtab-config-io > .section-head,
+#view-settings #ui-settings-form,
+#view-settings .config-io-grid,
+#subtab-dataset .dataset-settings-card,
+#subtab-providers .provider-col {
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 18px 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 97%, white 3%), color-mix(in srgb, var(--panel) 94%, var(--bg) 6%));
+  box-shadow: 0 14px 34px rgba(31, 35, 40, 0.045);
+}
+
+#subtab-ai > .section-head,
+#subtab-config-io > .section-head {
+  margin: 0;
+  padding: 16px 18px 0;
+  border-bottom: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+#view-settings #ui-settings-form {
+  display: grid;
+  padding: 14px 18px 18px;
+  border-top: 0;
+  gap: 14px;
+}
+
+#subtab-ai,
+#subtab-config-io {
+  display: none;
+}
+
+#subtab-ai.is-active,
+#subtab-config-io.is-active {
+  display: grid;
+  gap: 0;
+}
+
+#subtab-providers .provider-col,
+#subtab-dataset .dataset-settings-card {
+  padding: 16px;
+}
+
+#subtab-providers .provider-settings-card,
+#subtab-dataset .dataset-settings-card,
+#subtab-config-io .routing-card {
+  box-shadow: none;
+}
+
+#subtab-config-io .config-io-grid {
+  padding: 16px;
+  border-top: 0;
+  gap: 16px;
+}
+
+#subtab-config-io .routing-card {
+  height: auto;
 }
 
 .provider-registry-list {
