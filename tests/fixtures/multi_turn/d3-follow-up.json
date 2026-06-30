@@ -1,0 +1,26 @@
+{
+  "transcript_id": "MT-D3-FOLLOWUP",
+  "title": "D3 hotspot-soiling answer followed by a narrowed follow-up",
+  "notes": [
+    "Turn 1 anchors the anomaly subset.",
+    "Turn 2 depends on the prior answer and should not restate the full filter from scratch."
+  ],
+  "turns": [
+    {
+      "turn_id": "open-hotspot-soiling",
+      "question": "Which inverters have open hotspot anomalies caused by soiling?",
+      "expected_intent_types": ["C"],
+      "required_tools": ["anomalies"],
+      "required_text": ["hotspot", "soiling"],
+      "required_numbers": [2.0, 7.0, 55.0]
+    },
+    {
+      "turn_id": "highest-loss-follow-up",
+      "question": "Which of those has the higher estimated power loss?",
+      "expected_intent_types": ["C"],
+      "required_tools": ["anomalies"],
+      "required_text": ["55"],
+      "required_numbers": [55.0]
+    }
+  ]
+}

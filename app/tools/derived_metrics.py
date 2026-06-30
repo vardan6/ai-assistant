@@ -106,6 +106,7 @@ def performance_ratio_metric(
     inverter: str | None = None,
     window: str = "last_week",
     aggregate_by: str = "inverter",
+    sort_order: str = "desc",
     limit: int | None = None,
 ) -> dict[str, Any]:
     frame = context.data.table("generation_readings")
@@ -117,6 +118,7 @@ def performance_ratio_metric(
         return _empty_metric("performance_ratio", window=window, aggregate_by=aggregate_by)
 
     group = _normalize_group(aggregate_by, default="inverter")
+    ascending = str(sort_order or "desc").strip().lower() == "asc"
     limit = clamp_limit(limit, default=5, maximum=20)
 
     if group == "plant":
@@ -124,7 +126,7 @@ def performance_ratio_metric(
             frame.groupby("plant_id", dropna=False)["performance_ratio"]
             .agg(avg_performance_ratio="mean", reading_count="count")
             .reset_index()
-            .sort_values("avg_performance_ratio", ascending=False)
+            .sort_values("avg_performance_ratio", ascending=ascending)
             .head(limit)
         )
         return {
@@ -132,6 +134,7 @@ def performance_ratio_metric(
             "metric": "performance_ratio",
             "window": _normalize_window(window),
             "aggregate_by": group,
+            "sort_order": "asc" if ascending else "desc",
             "matched_readings": int(len(frame)),
             "window_start": _iso(frame["timestamp"].min()),
             "window_end": _iso(frame["timestamp"].max()),
@@ -150,7 +153,7 @@ def performance_ratio_metric(
         frame.groupby("inverter_id", dropna=False)["performance_ratio"]
         .agg(avg_performance_ratio="mean", reading_count="count")
         .reset_index()
-        .sort_values("avg_performance_ratio", ascending=False)
+        .sort_values("avg_performance_ratio", ascending=ascending)
         .head(limit)
     )
     inverter_meta = context.data.table("inverters")[["inverter_id", "plant_id"]].copy()
@@ -160,6 +163,7 @@ def performance_ratio_metric(
         "metric": "performance_ratio",
         "window": _normalize_window(window),
         "aggregate_by": group,
+        "sort_order": "asc" if ascending else "desc",
         "matched_readings": int(len(frame)),
         "window_start": _iso(frame["timestamp"].min()),
         "window_end": _iso(frame["timestamp"].max()),
@@ -339,7 +343,8 @@ def register(registry: ToolRegistry) -> None:
         ToolSpec(
             name="performance_ratio",
             description=(
-                "Rank average performance ratio over a dataset-anchored time window by plant or inverter."
+                "Rank average performance ratio over a dataset-anchored time window by plant or inverter. "
+                "Use sort_order='asc' to find the worst performer; sort_order='desc' (default) for the best."
             ),
             parameters={
                 "type": "object",
@@ -348,6 +353,7 @@ def register(registry: ToolRegistry) -> None:
                     "inverter": {"type": "string", "description": "Filter by inverter_id."},
                     "window": {"type": "string", "enum": sorted(_WINDOWS), "description": "Dataset-anchored time window."},
                     "aggregate_by": {"type": "string", "enum": sorted(_AGGREGATE_BY), "description": "Return plant- or inverter-level aggregates."},
+                    "sort_order": {"type": "string", "enum": ["asc", "desc"], "description": "Sort order: 'desc' (default) returns highest PR first (best), 'asc' returns lowest PR first (worst)."},
                     "limit": {"type": "integer", "description": "Maximum number of ranked results to return (1-20)."},
                 },
                 "additionalProperties": False,

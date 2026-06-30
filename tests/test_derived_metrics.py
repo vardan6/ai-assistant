@@ -37,6 +37,36 @@ def test_performance_ratio_ranks_top_inverter_for_last_week():
     assert isclose(result["results"][0]["avg_performance_ratio"], 0.955525, rel_tol=0, abs_tol=1e-6)
 
 
+def test_performance_ratio_sort_asc_returns_worst_plant_first():
+    # A2 fix: sort_order="asc" puts lowest-PR plant first (Rajasthan, ≈0.9077)
+    registry = build_registry()
+    result = registry.invoke(
+        "performance_ratio",
+        {"window": "last_week", "aggregate_by": "plant", "sort_order": "asc", "limit": 1},
+        _ctx(),
+    )
+    assert result["ok"] is True
+    assert result["sort_order"] == "asc"
+    first = result["results"][0]
+    assert first["plant_name"] == "Rajasthan Solar Park"
+    assert isclose(first["avg_performance_ratio"], 0.9077, rel_tol=0, abs_tol=5e-4)
+
+
+def test_performance_ratio_inverter_result_exposes_inverter_id():
+    # A3 fix: inverter-level results must include inverter_id (not just plant_id)
+    registry = build_registry()
+    result = registry.invoke(
+        "performance_ratio",
+        {"window": "all_time", "aggregate_by": "inverter", "sort_order": "desc", "limit": 1},
+        _ctx(),
+    )
+    assert result["ok"] is True
+    top = result["results"][0]
+    assert "inverter_id" in top
+    assert top["inverter_id"] == "INV_4137001_04"
+    assert isclose(top["avg_performance_ratio"], 0.9519, rel_tol=0, abs_tol=5e-4)
+
+
 def test_mttr_matches_critical_alert_mean_time_to_resolve():
     registry = build_registry()
     result = registry.invoke(
@@ -98,4 +128,5 @@ def test_pipeline_refuses_explicit_out_of_scope_question(monkeypatch):
     assert "can't calculate revenue loss" in answer.answer
     assert answer.tool_calls == []
     assert answer.bound_tools == []
+    assert answer.intent_meta["turn_kind"] == "out_of_scope"
     assert calls == ["intent"]

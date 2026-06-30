@@ -59,16 +59,23 @@ def anomalies_lookup(
     frame = filter_exact(frame, "anomaly_type", _normalize_anomaly_type(anomaly_type))
     frame = filter_exact(frame, "cause", cause)
     status_counts = counts(frame, "status")
+    matched_inverter_ids = (
+        [str(v) for v in frame["inverter_id"].dropna().tolist()]
+        if "inverter_id" in frame.columns
+        else []
+    )
     return {
         "ok": True,
         "total_anomalies": int(len(source)),
         "matched": int(len(frame)),
         "anomaly_ids": [int(value) for value in frame["anomaly_id"].tolist()] if "anomaly_id" in frame.columns else [],
+        "matched_inverter_ids": matched_inverter_ids,
         "status_counts": status_counts,
         "severity_counts": counts(frame, "severity"),
         "summary": {
             "matched": int(len(frame)),
             "status_counts": status_counts,
+            "matched_inverter_ids": matched_inverter_ids,
         },
         "anomalies": records(frame, _FIELDS),
     }

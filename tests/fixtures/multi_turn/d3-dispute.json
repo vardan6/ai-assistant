@@ -1,0 +1,29 @@
+{
+  "transcript_id": "MT-D3-DISPUTE",
+  "title": "D3 answer disputed on the next turn",
+  "notes": [
+    "The second turn is written for reconciliation coverage once Lane C lands.",
+    "Verdict checks intentionally match semantic tokens inside the structured verdict object so Lane D does not hard-code Lane C's final field names."
+  ],
+  "turns": [
+    {
+      "turn_id": "baseline-answer",
+      "question": "Which inverters have open hotspot anomalies caused by soiling?",
+      "expected_intent_types": ["C"],
+      "required_tools": ["anomalies"],
+      "required_text": ["hotspot", "soiling"],
+      "required_numbers": [2.0, 7.0, 55.0]
+    },
+    {
+      "turn_id": "dispute-recheck",
+      "question": "That answer looks wrong. Recheck only the hotspot anomalies caused by soiling and tell me which inverter has the larger loss.",
+      "expected_intent_types": ["C"],
+      "required_tools": ["anomalies"],
+      "required_text": ["55"],
+      "required_numbers": [55.0],
+      "require_prior_answer_verdict": true,
+      "required_prior_answer_verdict_text": ["wrong", "hotspot", "soiling"],
+      "required_prior_answer_verdict_numbers": [55.0]
+    }
+  ]
+}

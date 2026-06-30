@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib import request
 
@@ -31,6 +32,33 @@ class CheckResult:
     name: str
     ok: bool
     detail: str
+
+
+@dataclass(frozen=True)
+class ReplayTurnSpec:
+    turn_id: str
+    question: str
+    expected_intent_types: tuple[str, ...]
+    required_tools: tuple[str, ...] = ()
+    required_bound_tools: tuple[str, ...] = ()
+    required_trace_kinds: tuple[str, ...] = ()
+    required_text: tuple[str, ...] = ()
+    required_numbers: tuple[float, ...] = ()
+    number_tolerance: float = 0.05
+    expected_stop_reason: str = "final_answer"
+    require_structured_tool_results: bool = False
+    require_prior_answer_verdict: bool = False
+    required_prior_answer_verdict_text: tuple[str, ...] = ()
+    required_prior_answer_verdict_numbers: tuple[float, ...] = ()
+    deferred_assertions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MultiTurnReplaySpec:
+    transcript_id: str
+    title: str
+    turns: tuple[ReplayTurnSpec, ...]
+    notes: tuple[str, ...] = ()
 
 
 def build_replay_specs() -> dict[str, ReplaySpec]:
@@ -150,6 +178,26 @@ def extract_numbers(text: str) -> list[float]:
     return [float(match.replace(",", "")) for match in re.findall(r"-?\d[\d,]*\.?\d*", text)]
 
 
+def extract_numbers_from_value(value: Any) -> list[float]:
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, str):
+        return extract_numbers(value)
+    if isinstance(value, dict):
+        numbers: list[float] = []
+        for nested in value.values():
+            numbers.extend(extract_numbers_from_value(nested))
+        return numbers
+    if isinstance(value, (list, tuple)):
+        numbers: list[float] = []
+        for nested in value:
+            numbers.extend(extract_numbers_from_value(nested))
+        return numbers
+    return []
+
+
 def contains_subsequence(actual: list[str], required: tuple[str, ...]) -> bool:
     if not required:
         return True
@@ -160,6 +208,81 @@ def contains_subsequence(actual: list[str], required: tuple[str, ...]) -> bool:
             if index == len(required):
                 return True
     return False
+
+
+def replay_spec_from_mapping(case_id: str, payload: dict[str, Any]) -> ReplaySpec:
+    return ReplaySpec(
+        case_id=case_id,
+        question=str(payload["question"]),
+        expected_intent_types=tuple(str(value) for value in payload.get("expected_intent_types", ())),
+        required_tools=tuple(str(value) for value in payload.get("required_tools", ())),
+        required_bound_tools=tuple(str(value) for value in payload.get("required_bound_tools", ())),
+        required_trace_kinds=tuple(str(value) for value in payload.get("required_trace_kinds", ())),
+        required_text=tuple(str(value) for value in payload.get("required_text", ())),
+        required_numbers=tuple(float(value) for value in payload.get("required_numbers", ())),
+        number_tolerance=float(payload.get("number_tolerance", 0.05)),
+        expected_stop_reason=str(payload.get("expected_stop_reason", "final_answer")),
+        require_structured_tool_results=bool(payload.get("require_structured_tool_results", False)),
+    )
+
+
+def multi_turn_fixtures_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "multi_turn"
+
+
+def load_multi_turn_spec(path: str | Path) -> MultiTurnReplaySpec:
+    fixture_path = Path(path)
+    raw = json.loads(fixture_path.read_text(encoding="utf-8"))
+    transcript_id = str(raw["transcript_id"])
+    title = str(raw["title"])
+    turns_payload = raw.get("turns")
+    if not isinstance(turns_payload, list) or not turns_payload:
+        raise ValueError(f"{fixture_path} must define a non-empty turns list")
+    turns: list[ReplayTurnSpec] = []
+    for index, turn_payload in enumerate(turns_payload, start=1):
+        spec = replay_spec_from_mapping(f"{transcript_id}:{index}", turn_payload)
+        turns.append(
+            ReplayTurnSpec(
+                turn_id=str(turn_payload.get("turn_id", f"turn-{index}")),
+                question=spec.question,
+                expected_intent_types=spec.expected_intent_types,
+                required_tools=spec.required_tools,
+                required_bound_tools=spec.required_bound_tools,
+                required_trace_kinds=spec.required_trace_kinds,
+                required_text=spec.required_text,
+                required_numbers=spec.required_numbers,
+                number_tolerance=spec.number_tolerance,
+                expected_stop_reason=spec.expected_stop_reason,
+                require_structured_tool_results=spec.require_structured_tool_results,
+                require_prior_answer_verdict=bool(turn_payload.get("require_prior_answer_verdict", False)),
+                required_prior_answer_verdict_text=tuple(
+                    str(value) for value in turn_payload.get("required_prior_answer_verdict_text", ())
+                ),
+                required_prior_answer_verdict_numbers=tuple(
+                    float(value) for value in turn_payload.get("required_prior_answer_verdict_numbers", ())
+                ),
+                deferred_assertions=tuple(
+                    str(value) for value in turn_payload.get("deferred_assertions", ())
+                ),
+            )
+        )
+    return MultiTurnReplaySpec(
+        transcript_id=transcript_id,
+        title=title,
+        turns=tuple(turns),
+        notes=tuple(str(value) for value in raw.get("notes", ())),
+    )
+
+
+def build_multi_turn_specs(fixtures_dir: str | Path | None = None) -> dict[str, MultiTurnReplaySpec]:
+    root = Path(fixtures_dir) if fixtures_dir is not None else multi_turn_fixtures_dir()
+    if not root.exists():
+        return {}
+    specs: dict[str, MultiTurnReplaySpec] = {}
+    for path in sorted(root.glob("*.json")):
+        spec = load_multi_turn_spec(path)
+        specs[spec.transcript_id] = spec
+    return specs
 
 
 def evaluate_payload(spec: ReplaySpec, payload: dict[str, Any]) -> list[CheckResult]:
@@ -231,6 +354,58 @@ def evaluate_payload(spec: ReplaySpec, payload: dict[str, Any]) -> list[CheckRes
     return checks
 
 
+def evaluate_turn_payload(spec: ReplayTurnSpec, payload: dict[str, Any]) -> list[CheckResult]:
+    checks = evaluate_payload(
+        ReplaySpec(
+            case_id=spec.turn_id,
+            question=spec.question,
+            expected_intent_types=spec.expected_intent_types,
+            required_tools=spec.required_tools,
+            required_bound_tools=spec.required_bound_tools,
+            required_trace_kinds=spec.required_trace_kinds,
+            required_text=spec.required_text,
+            required_numbers=spec.required_numbers,
+            number_tolerance=spec.number_tolerance,
+            expected_stop_reason=spec.expected_stop_reason,
+            require_structured_tool_results=spec.require_structured_tool_results,
+        ),
+        payload,
+    )
+    verdict = payload.get("prior_answer_verdict")
+    if spec.require_prior_answer_verdict:
+        checks.append(
+            CheckResult(
+                name="prior_answer_verdict:present",
+                ok=isinstance(verdict, dict),
+                detail=f"expected structured prior_answer_verdict, got {type(verdict).__name__}",
+            )
+        )
+    if isinstance(verdict, dict):
+        verdict_text = json.dumps(verdict, sort_keys=True).lower()
+        verdict_numbers = extract_numbers_from_value(verdict)
+        for snippet in spec.required_prior_answer_verdict_text:
+            checks.append(
+                CheckResult(
+                    name=f"prior_answer_verdict:text:{snippet}",
+                    ok=snippet.lower() in verdict_text,
+                    detail=f"prior_answer_verdict did not contain '{snippet}'",
+                )
+            )
+        for number in spec.required_prior_answer_verdict_numbers:
+            matched = any(abs(actual - number) <= spec.number_tolerance for actual in verdict_numbers)
+            checks.append(
+                CheckResult(
+                    name=f"prior_answer_verdict:number:{number}",
+                    ok=matched,
+                    detail=(
+                        f"prior_answer_verdict numbers {verdict_numbers} "
+                        f"did not match {number}±{spec.number_tolerance}"
+                    ),
+                )
+            )
+    return checks
+
+
 def _create_session(base_url: str, title: str) -> str:
     body = json.dumps({"title": title}).encode()
     req = request.Request(
@@ -243,10 +418,9 @@ def _create_session(base_url: str, title: str) -> str:
         return json.loads(resp.read().decode())["id"]
 
 
-def run_case(base_url: str, spec: ReplaySpec, gating_mode: str = "gated") -> dict[str, Any]:
-    session_id = _create_session(base_url, f"Replay {spec.case_id}")
+def _post_question(base_url: str, *, session_id: str, question: str, gating_mode: str) -> dict[str, Any]:
     body = json.dumps({
-        "question": spec.question,
+        "question": question,
         "gating_mode": gating_mode,
         "session_id": session_id,
     }).encode()
@@ -260,6 +434,29 @@ def run_case(base_url: str, spec: ReplaySpec, gating_mode: str = "gated") -> dic
         return json.loads(resp.read().decode())
 
 
+def run_case(base_url: str, spec: ReplaySpec, gating_mode: str = "gated") -> dict[str, Any]:
+    session_id = _create_session(base_url, f"Replay {spec.case_id}")
+    return _post_question(base_url, session_id=session_id, question=spec.question, gating_mode=gating_mode)
+
+
+def run_multi_turn_case(
+    base_url: str,
+    spec: MultiTurnReplaySpec,
+    gating_mode: str = "gated",
+) -> list[tuple[ReplayTurnSpec, dict[str, Any]]]:
+    session_id = _create_session(base_url, f"Replay {spec.transcript_id}")
+    results: list[tuple[ReplayTurnSpec, dict[str, Any]]] = []
+    for turn in spec.turns:
+        payload = _post_question(
+            base_url,
+            session_id=session_id,
+            question=turn.question,
+            gating_mode=gating_mode,
+        )
+        results.append((turn, payload))
+    return results
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=".venv/bin/python -m app.case_replay",
@@ -268,10 +465,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--server", default="http://127.0.0.1:9006", help="server base URL")
     parser.add_argument("--gating-mode", choices=["gated", "bind_all"], default="gated")
     parser.add_argument("--case", action="append", default=[], help="case id to replay; repeatable")
+    parser.add_argument(
+        "--transcript",
+        action="append",
+        default=[],
+        help="multi-turn transcript id to replay; repeatable",
+    )
     args = parser.parse_args(argv)
 
     build_oracle()  # validates the oracle can be built before replay
     specs = build_replay_specs()
+    multi_turn_specs = build_multi_turn_specs()
     selected_ids = args.case or list(specs)
     rc = 0
     for case_id in selected_ids:
@@ -290,6 +494,30 @@ def main(argv: list[str] | None = None) -> int:
         for check in checks:
             print(f"  - {check.name}: {'ok' if check.ok else 'fail'} ({check.detail})")
         if not ok:
+            rc = 1
+    selected_transcripts = args.transcript or []
+    for transcript_id in selected_transcripts:
+        if transcript_id not in multi_turn_specs:
+            print(f"{transcript_id}: unknown transcript id")
+            rc = 1
+            continue
+        transcript = multi_turn_specs[transcript_id]
+        turn_results = run_multi_turn_case(args.server, transcript, gating_mode=args.gating_mode)
+        transcript_ok = True
+        print(f"{transcript.transcript_id}: {transcript.title}")
+        for turn, payload in turn_results:
+            checks = evaluate_turn_payload(turn, payload)
+            ok = all(check.ok for check in checks)
+            transcript_ok = transcript_ok and ok
+            print(f"  {turn.turn_id}: {'PASS' if ok else 'FAIL'}")
+            print(f"    question: {turn.question}")
+            print(f"    intent: {payload.get('intent', {}).get('types', [])}")
+            print(f"    tools: {[call.get('name') for call in payload.get('tool_calls', [])]}")
+            if turn.deferred_assertions:
+                print(f"    deferred_assertions: {list(turn.deferred_assertions)}")
+            for check in checks:
+                print(f"    - {check.name}: {'ok' if check.ok else 'fail'} ({check.detail})")
+        if not transcript_ok:
             rc = 1
     return rc
 

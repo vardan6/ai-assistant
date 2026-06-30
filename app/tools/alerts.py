@@ -49,11 +49,17 @@ def alerts_lookup(
     frame = filter_exact(frame, "status", status)
     frame = filter_exact(frame, "severity", severity)
     frame = filter_exact(frame, "type", type)
+    matched_inverter_ids = (
+        [str(v) for v in frame["inverter_id"].dropna().tolist()]
+        if "inverter_id" in frame.columns
+        else []
+    )
     return {
         "ok": True,
         "total_alerts": int(len(source)),
         "matched": int(len(frame)),
         "alert_ids": [int(value) for value in frame["alert_id"].tolist()] if "alert_id" in frame.columns else [],
+        "matched_inverter_ids": matched_inverter_ids,
         "status_counts": counts(frame, "status"),
         "severity_counts": counts(frame, "severity"),
         "alerts": records(frame, _FIELDS),

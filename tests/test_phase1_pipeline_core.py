@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.ai import AgentResult, UsageSnapshot, run_agent_loop
+from app.ai import AgentResult, ToolCallRecord, UsageSnapshot, run_agent_loop
 from app.ai.intent_schema import coerce_intent
 from app.config import load_config
 from app.data import PandasDataSource
@@ -171,6 +171,7 @@ def test_pipeline_smalltalk_fast_path_skips_provider_resolution(monkeypatch):
 
     assert result.answer.startswith("Hi!")
     assert result.fast_path == "smalltalk"
+    assert result.intent_meta["turn_kind"] == "smalltalk"
     assert result.stop_reason == "fast_path"
     assert [event.kind for event in result.trace_events] == ["intent_started", "intent_finished"]
 
@@ -187,6 +188,7 @@ def test_pipeline_empty_prompt_fast_path_skips_provider_resolution(monkeypatch):
 
     assert result.answer == "Please ask a question about the solar operations dataset."
     assert result.fast_path == "empty"
+    assert result.intent_meta["turn_kind"] == "command"
     assert result.intent_meta["parse_errors"] == ["empty prompt"]
     assert result.stop_reason == "fast_path"
 
@@ -298,3 +300,136 @@ def test_pipeline_emits_trace_for_gated_empty_classification_fallback(monkeypatc
         "gating_fallback",
         "synthesis_started",
     ]
+
+
+def test_pipeline_routes_dispute_turn_into_data_path_even_if_classifier_marks_out_of_scope(monkeypatch):
+    pipeline = Pipeline(load_config())
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": [],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "",
+                    "out_of_scope": True,
+                    "confidence": 0.2,
+                    "summary": "User disputes a prior answer",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    calls: list[str] = []
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        calls.append(purpose)
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+        assert tool_names == ["inverters", "plants"]
+        return AgentResult(
+            answer="Let me re-check that claim.",
+            tool_calls=[],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer("Your previous answer was wrong.")
+
+    assert result.answer == "Let me re-check that claim."
+    assert result.intent_meta["turn_kind"] == "dispute_correction"
+    assert result.stop_reason == "final_answer"
+    assert calls == ["intent", "synthesis"]
+
+
+def test_pipeline_emits_structured_prior_answer_verdict_for_dispute_turn(monkeypatch):
+    pipeline = Pipeline(load_config())
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["C"],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "anomalies",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Re-check hotspot anomalies caused by soiling",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+        return AgentResult(
+            answer="INV_4136001_08 has the larger estimated power loss at 55.0 kW.",
+            tool_calls=[
+                ToolCallRecord(
+                    name="anomalies",
+                    args={"status": "open", "anomaly_type": "hotspot", "cause": "soiling"},
+                    result={
+                        "ok": True,
+                        "matched": 2,
+                        "anomaly_ids": [7, 55],
+                        "matched_inverter_ids": ["INV_4135001_09", "INV_4136001_08"],
+                    },
+                    iteration=1,
+                    latency_ms=10,
+                )
+            ],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer(
+        "That answer looks wrong. Recheck only the hotspot anomalies caused by soiling and tell me which inverter has the larger loss.",
+        history_window=[
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": "The soiling-related hotspot anomalies are on INV_4135001_09 and INV_4136001_08 with anomaly ids 7 and 55.",
+                "metadata": {
+                    "evidence_fingerprint": {
+                        "sha256": "abc123",
+                    }
+                },
+            }
+        ],
+    )
+
+    assert result.prior_answer_verdict is not None
+    assert result.prior_answer_verdict["status"] == "correct"
+    assert result.prior_answer_verdict["referenced_message_id"] == 2
+    assert result.prior_answer_verdict["tool_names"] == ["anomalies"]
+    assert result.prior_answer_verdict["entity_ids"][:4] == ["INV_4135001_09", "INV_4136001_08", "7", "55"]
+    assert 55.0 in result.prior_answer_verdict["numbers"]
+    assert result.prior_answer_verdict["evidence_fingerprint_sha256"] == "abc123"
+    assert [event.kind for event in result.trace_events][-1] == "reconciliation_finished"

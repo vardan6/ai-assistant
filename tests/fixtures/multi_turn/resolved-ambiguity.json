@@ -1,0 +1,23 @@
+{
+  "transcript_id": "MT-RESOLVED-AMBIGUITY",
+  "title": "Ambiguous question resolved by prior plant context",
+  "notes": [
+    "Turn 2 is intentionally ambiguous in isolation and should rely on Turn 1 context."
+  ],
+  "turns": [
+    {
+      "turn_id": "set-plant-context",
+      "question": "Tell me about Rajasthan Solar Park's current performance ratio.",
+      "expected_intent_types": ["B"],
+      "required_bound_tools": ["performance_ratio", "inverters", "plants"],
+      "required_text": ["rajasthan"],
+      "required_numbers": [0.9077]
+    },
+    {
+      "turn_id": "ambiguous-follow-up",
+      "question": "How is the plant doing?",
+      "expected_intent_types": ["B"],
+      "required_text": ["rajasthan"]
+    }
+  ]
+}

@@ -361,6 +361,9 @@ not a graded surface.
 - Replay payload checks also cover the architecture-level metadata exposed by
   the API: bound-tool subsets, stage-ordered trace events, and structured
   tool-call results.
+- Lane D's multi-turn transcript contract now lives in JSON fixtures under
+  `tests/fixtures/multi_turn/`; `app/case_replay.py` can discover them and replay
+  each transcript turn-by-turn inside a single chat session.
 - `tests/test_case_replay.py` and `tests/test_phase1_pipeline_core.py` carry the
   architecture probes for rubric rows 1–2 and the scripted chain/no-raw-row
   checks behind rows 3–4.
@@ -368,7 +371,71 @@ not a graded surface.
 **Automated today** (15 replay specs in `app/case_replay.py`): D2, D3, D4, D5,
 D6, P4, I5, G2, G4, W3, AL5, AN6, X2, X4, X6.
 
+**Authored today for multi-turn replay** (fixture-backed transcripts under
+`tests/fixtures/multi_turn/`): `MT-D3-FOLLOWUP`, `MT-D3-DISPUTE`,
+`MT-PRIOR-ANSWER`, `MT-RESOLVED-AMBIGUITY`.
+
 **Pending — the CLI target is the full catalog:** all 51 behavioural cases + the
 5 structural probes (§3.10) are meant to run through CLI replay. The remaining 36
 behavioural cases (and the probes) still need replay specs and a live
 full-catalog run against the configured chat stack (roadmap §2b).
+
+### 3.13 Multi-turn transcript format
+
+Lane D's transcript fixtures are JSON documents consumed by
+`app/case_replay.py` via `build_multi_turn_specs()` / `load_multi_turn_spec()`.
+Each file defines one replay session and a turn-by-turn expectation contract.
+
+**Format**
+
+- `transcript_id` — stable replay id, used in CLI selection (`--transcript`) and
+  session titles (`Replay {transcript_id}`).
+- `title` — human-readable transcript label.
+- `notes` — optional authoring notes; not asserted.
+- `turns` — non-empty array of turn objects, replayed in order against one chat
+  session.
+- `turn.turn_id` — stable turn label within the transcript.
+- `turn.question` — the user message sent for that turn.
+- `turn.expected_intent_types` — expected intent tags for that turn.
+- `turn.required_tools` / `turn.required_bound_tools` / `turn.required_trace_kinds`
+  — optional subsequence assertions reusing the single-turn harness semantics.
+- `turn.required_text` / `turn.required_numbers` / `turn.number_tolerance` —
+  turn-local answer assertions.
+- `turn.expected_stop_reason` — defaults to `final_answer`; use for clarify /
+  refuse turns when needed.
+- `turn.require_structured_tool_results` — opt-in structured-payload check.
+- `turn.require_prior_answer_verdict` — require a structured
+  `prior_answer_verdict` object on the API payload for this turn.
+- `turn.required_prior_answer_verdict_text` /
+  `turn.required_prior_answer_verdict_numbers` — schema-tolerant assertions over
+  the structured verdict object itself. The harness serializes the object and
+  searches for required semantic tokens and numeric claims there, rather than in
+  free-form answer prose.
+- `turn.deferred_assertions` — placeholder list for assertions intentionally
+  blocked on another lane. Keep this only for checks that truly cannot be
+  expressed against the current structured payload.
+
+**Authoring rules**
+
+- Keep assertions on durable machine-checkable signals: intent tags, tool chain,
+  answer numerics, identifiers, and explicit stop reasons.
+- Do not assert on free-form reconciliation prose. Once Lane C lands, D2 should
+  bind reconciliation checks to structured `prior_answer_verdict`, not wording.
+- For verdict assertions, prefer semantic tokens and numbers that should survive
+  harmless schema reshaping; Lane D owns the assertions, Lane C owns the exact
+  verdict key layout.
+- A transcript may depend on prior-turn context, but each turn still declares
+  its own expected observable outcome.
+- Use transcript ids and turn ids that remain stable if the user-facing wording
+  is revised.
+
+**Current fixture set**
+
+- `MT-D3-FOLLOWUP` — baseline D3 answer, then a follow-up that narrows to the
+  higher-loss inverter.
+- `MT-D3-DISPUTE` — baseline D3 answer, then a dispute turn with deferred
+  `prior_answer_verdict` assertions against the structured verdict object.
+- `MT-PRIOR-ANSWER` — ask for the worst-performing plant, then recall the prior
+  answer without repeating the whole query.
+- `MT-RESOLVED-AMBIGUITY` — establish plant context, then resolve "How is the
+  plant doing?" from prior turns instead of clarifying again.

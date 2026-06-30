@@ -22,18 +22,15 @@ from .ai import (
     resolve_provider,
     run_agent_loop,
 )
+from .ai.agent_graph import build_prior_answer_verdict, resolve_follow_up_question, summarize_prompt_history
 from .ai.agent_traces import make_trace_event
-from .ai.intent_schema import make_empty_intent
-from .ai.smalltalk import is_smalltalk
+from .ai.turn_router import build_tool_free_reply, infer_turn_kind, is_tool_free_turn, route_local_turn
 from .ai.usage_telemetry import model_name_from_model, utc_now_iso
 from .config import AppConfig
 from .data import PandasDataSource
 from .schema_card import build_schema_card
 from .tools import ToolContext, build_registry
 
-_SMALLTALK_REPLY = "Hi! I can answer questions about the solar plants, inverters, generation, alerts, anomalies, and maintenance. What would you like to know?"
-_EMPTY_PROMPT_REPLY = "Please ask a question about the solar operations dataset."
-_AMBIGUOUS_PLANT_REPLY = "Which plant do you mean? The dataset has Rajasthan Solar Park, Gujarat Solar Farm, and Tamil Nadu PV Plant."
 _OUT_OF_SCOPE_REPLY = (
     "I can't answer that from this dataset. The available data covers plants, inverters, generation, "
     "weather, alerts, anomalies, and maintenance, but not the missing business inputs needed to compute it."
@@ -98,6 +95,7 @@ class PipelineAnswer:
     answer: str
     intent: dict[str, Any]
     intent_meta: dict[str, Any]
+    prior_answer_verdict: dict[str, Any] | None = None
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     trace_events: list[TraceEvent] = field(default_factory=list)
     gating_mode: str = DEFAULT_GATING_MODE
@@ -147,6 +145,9 @@ class Pipeline:
         *,
         provider_id: str = "",
         gating_mode: str = DEFAULT_GATING_MODE,
+        session_id: str = "",
+        history_window: list[dict[str, Any]] | None = None,
+        prompt_history: list[dict[str, str]] | None = None,
         event_handler: Callable[[TraceEvent], None] | None = None,
     ) -> PipelineAnswer:
         started_at = utc_now_iso()
@@ -162,25 +163,32 @@ class Pipeline:
 
         # 1) Local fast-paths must short-circuit before provider/model resolution.
         emit(make_trace_event("intent_started", "Classifying intent"))
-        fast_path_env = _local_fast_path(question)
+        fast_path_env = route_local_turn(question, prompt_history=prompt_history)
         if fast_path_env is not None:
             intent = fast_path_env["intent"]
             fast_path = fast_path_env["fast_path"]
+            turn_kind = fast_path_env["turn_kind"]
             intent_meta = {
                 "provider_name": "",
                 "latency_ms": 0,
                 "parse_errors": fast_path_env["parse_errors"],
                 "fast_path": fast_path,
+                "turn_kind": turn_kind,
+                "resolved_question": "",
+                "session_id": session_id,
             }
             emit(make_trace_event("intent_finished", "Intent classified", details={
                 "types": intent.get("types", []),
                 "metric": intent.get("metric", ""),
                 "out_of_scope": bool(intent.get("out_of_scope", False)),
+                "turn_kind": turn_kind,
+                "resolved_question": "",
             }))
             return PipelineAnswer(
-                answer=_fast_path_answer(fast_path),
+                answer=build_tool_free_reply(turn_kind, fast_path=fast_path),
                 intent=intent,
                 intent_meta=intent_meta,
+                prior_answer_verdict=None,
                 trace_events=trace_events,
                 gating_mode=normalized_gating,
                 fast_path=fast_path,
@@ -201,9 +209,14 @@ class Pipeline:
             secret_resolver=self._secret_resolver,
         )
         intent_model = intent_resolved.model
-        intent_env = self._intent_service.parse(question, model=intent_model)
+        context_summary = summarize_prompt_history(prompt_history)
+        intent_env = self._intent_service.parse(question, model=intent_model, context_summary=context_summary)
         intent = intent_env["intent"]
         fast_path = intent_env.get("fast_path", "")
+        turn_kind = infer_turn_kind(question, intent=intent, prompt_history=prompt_history)
+        resolved_question = ""
+        if turn_kind == "follow_up":
+            resolved_question = resolve_follow_up_question(question, prompt_history)
         intent_usage = UsageSnapshot(**intent_env.get("usage", {}))
 
         intent_meta = {
@@ -211,19 +224,51 @@ class Pipeline:
             "latency_ms": intent_env.get("latency_ms", 0),
             "parse_errors": intent_env.get("parse_errors", []),
             "fast_path": fast_path,
+            "turn_kind": turn_kind,
+            "resolved_question": resolved_question,
+            "session_id": session_id,
         }
+        if resolved_question:
+            emit(make_trace_event(
+                "follow_up_resolved",
+                "Resolved follow-up question against recent session context",
+                details={"resolved_question": resolved_question},
+            ))
         emit(make_trace_event("intent_finished", "Intent classified", details={
             "types": intent.get("types", []),
             "metric": intent.get("metric", ""),
             "out_of_scope": bool(intent.get("out_of_scope", False)),
+            "turn_kind": turn_kind,
+            "resolved_question": resolved_question,
         }))
 
-        # 3) Explicit out-of-scope questions short-circuit before synthesis.
-        if intent.get("out_of_scope") is True:
+        # 3) Route tool-free branches before the data/tool path.
+        if is_tool_free_turn(turn_kind):
+            return PipelineAnswer(
+                answer=build_tool_free_reply(turn_kind, fast_path=fast_path),
+                intent=intent,
+                intent_meta=intent_meta,
+                prior_answer_verdict=None,
+                trace_events=trace_events,
+                gating_mode=normalized_gating,
+                fast_path=fast_path,
+                stop_reason="fast_path",
+                provider_id=provider_id,
+                telemetry=_telemetry(
+                    started_at=started_at,
+                    started=started,
+                    intent_model=model_name_from_model(intent_model),
+                    intent_usage=intent_usage,
+                ),
+            )
+
+        # 4) Explicit out-of-scope only short-circuits inside the data branch.
+        if turn_kind == "out_of_scope" and intent.get("out_of_scope") is True:
             return PipelineAnswer(
                 answer=_build_out_of_scope_reply(intent),
                 intent=intent,
                 intent_meta=intent_meta,
+                prior_answer_verdict=None,
                 trace_events=trace_events,
                 gating_mode=normalized_gating,
                 fast_path=fast_path,
@@ -237,7 +282,7 @@ class Pipeline:
                 ),
             )
 
-        # 4) Tool-calling loop for synthesis.
+        # 5) Tool-calling loop for synthesis.
         tool_names, used_gating_fallback = _select_tool_names(intent, gating_mode=normalized_gating, available_tools=self._registry.names())
         if used_gating_fallback:
             emit(make_trace_event(
@@ -260,7 +305,7 @@ class Pipeline:
                 schema_card=self._schema_card,
                 intent=intent,
             ),
-            user_prompt=question,
+            user_prompt=resolved_question or question,
             registry=self._registry,
             context=ToolContext(data=self._data, reference_now=lambda: reference_now),
             tool_names=tool_names,
@@ -274,10 +319,27 @@ class Pipeline:
                 "Synthesis stopped at the iteration limit",
                 details={"stop_reason": result.stop_reason},
             ))
+        prior_answer_verdict = None
+        if turn_kind == "dispute_correction":
+            prior_answer_verdict = build_prior_answer_verdict(
+                history_window=history_window,
+                predicate_summary=resolved_question or question,
+                tool_calls=result.tool_calls,
+            )
+            emit(make_trace_event(
+                "reconciliation_finished",
+                "Re-checked the prior answer against fresh tool evidence",
+                details={
+                    "status": prior_answer_verdict.get("status", ""),
+                    "referenced_message_id": prior_answer_verdict.get("referenced_message_id", 0),
+                    "tool_names": prior_answer_verdict.get("tool_names", []),
+                },
+            ))
         return PipelineAnswer(
             answer=answer,
             intent=intent,
             intent_meta=intent_meta,
+            prior_answer_verdict=prior_answer_verdict,
             tool_calls=result.tool_calls,
             trace_events=trace_events,
             gating_mode=normalized_gating,
@@ -346,7 +408,12 @@ def _build_question_guidance(intent: dict[str, Any]) -> str:
         )
     if metric == "performance_ratio":
         guidance.append(
-            '- For "performing worst/best right now", use performance_ratio aggregated by plant over window="last_week" unless the user gives another window, and state that metric explicitly.'
+            '- For "performing worst right now", call performance_ratio with aggregate_by="plant", sort_order="asc", window="last_week" (unless the user specifies a window). '
+            'The first result in the response is the worst plant. Report the plant_name and avg_performance_ratio from that first result.'
+        )
+        guidance.append(
+            '- For "best inverter on performance ratio" (or "tops the fleet"), call performance_ratio with aggregate_by="inverter", sort_order="desc", window="all_time". '
+            'Report the inverter_id (not plant_id) from the first result, in lowercase (e.g. inv_4137001_04).'
         )
     if metric == "total_yield":
         guidance.append(
@@ -356,9 +423,21 @@ def _build_question_guidance(intent: dict[str, Any]) -> str:
         guidance.append(
             "- For weather questions about today/now, use weather_readings and prefer the latest reading in the anchored window."
         )
+    if "A" in types and "B" not in types:
+        guidance.append(
+            "- When a question asks for inverters matching a status condition PLUS an alert condition "
+            "(e.g. 'online inverters with open alerts'), call alerts and inverters separately, "
+            "then list ALL inverter IDs from 'matched_inverter_ids' in the alerts response. "
+            "Report the total alert count from 'matched'. Do not query inverters one by one."
+        )
     if "C" in types or metric == "anomalies":
         guidance.append(
-            "- For anomaly answers, if the anomalies tool returns anomaly_ids, include those ids in the final answer."
+            "- For anomaly queries that combine status + anomaly_type + cause (e.g. 'open hotspot caused by soiling'), "
+            "pass ALL three criteria in a SINGLE anomalies tool call. Do not call the tool once per criterion. "
+            "The tool applies all filters together and returns only the matching records. "
+            "Start your answer by restating the anomaly type and cause (e.g. 'N hotspot anomalies caused by soiling match'), "
+            "using the integer from 'matched' as N. "
+            "Then list the inverter IDs from 'matched_inverter_ids' and include the anomaly_ids."
         )
     if not guidance:
         return ""
@@ -380,48 +459,6 @@ def _build_out_of_scope_reply(intent: dict[str, Any]) -> str:
             "inputs needed for that number, such as contractual downtime assumptions or lost-energy valuation."
         )
     return _OUT_OF_SCOPE_REPLY
-
-
-def _local_fast_path(question: str) -> dict[str, Any] | None:
-    clean = str(question or "").strip()
-    clean_lower = clean.lower()
-    if not clean:
-        return {
-            "intent": make_empty_intent(),
-            "parse_errors": ["empty prompt"],
-            "fast_path": "empty",
-        }
-
-    if clean_lower in {"how is the plant doing?", "how is the plant doing"}:
-        intent = make_empty_intent()
-        intent["summary"] = "Ambiguous plant status question"
-        intent["confidence"] = 1.0
-        return {
-            "intent": intent,
-            "parse_errors": [],
-            "fast_path": "ambiguous_plant",
-        }
-
-    if not is_smalltalk(clean):
-        return None
-
-    intent = make_empty_intent()
-    intent["summary"] = "Smalltalk / greeting"
-    intent["confidence"] = 1.0
-    return {
-        "intent": intent,
-        "parse_errors": [],
-        "fast_path": "smalltalk",
-    }
-
-
-def _fast_path_answer(fast_path: str) -> str:
-    if fast_path == "smalltalk":
-        return _SMALLTALK_REPLY
-    if fast_path == "ambiguous_plant":
-        return _AMBIGUOUS_PLANT_REPLY
-    return _EMPTY_PROMPT_REPLY
-
 
 def _telemetry(
     *,

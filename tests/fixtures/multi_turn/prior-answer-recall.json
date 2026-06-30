@@ -1,0 +1,23 @@
+{
+  "transcript_id": "MT-PRIOR-ANSWER",
+  "title": "Prior-answer recall without re-running the whole question",
+  "notes": [
+    "This case exercises turn-2 recall language before the verdict schema exists."
+  ],
+  "turns": [
+    {
+      "turn_id": "ask-worst-pr-plant",
+      "question": "Which plant is performing worst right now?",
+      "expected_intent_types": ["B"],
+      "required_bound_tools": ["performance_ratio", "inverters", "plants"],
+      "required_text": ["rajasthan"],
+      "required_numbers": [0.9077]
+    },
+    {
+      "turn_id": "recall-answer",
+      "question": "What was that plant again?",
+      "expected_intent_types": ["B"],
+      "required_text": ["rajasthan"]
+    }
+  ]
+}

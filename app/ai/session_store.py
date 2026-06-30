@@ -4,14 +4,33 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..config import AppConfig, load_config
+from .context_budget import (
+    AI_CONTEXT_HISTORY_CHAR_BUDGET,
+    AI_CONTEXT_MESSAGE_LIMIT,
+    AI_CONTEXT_SINGLE_MESSAGE_CHAR_LIMIT,
+    bound_history_window,
+    project_history_for_prompt,
+    stable_fingerprint,
+)
+
 
 class SessionStore:
-    def __init__(self, db_path: str | Path):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        config: AppConfig | None = None,
+        evidence_fingerprint_resolver: Callable[[], dict[str, Any] | None] | None = None,
+    ):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._config = config
+        self._evidence_fingerprint_resolver = evidence_fingerprint_resolver
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -84,23 +103,41 @@ class SessionStore:
 
     def get_session(self, session_id: str) -> dict[str, Any]:
         summary = self.get_session_summary(session_id)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, role, content, metadata_json, created_at
-                FROM messages
-                WHERE session_id = ?
-                ORDER BY id ASC
-                """,
-                (session_id,),
-            ).fetchall()
-        messages = []
-        for row in rows:
-            item = dict(row)
-            item["metadata"] = json.loads(item.pop("metadata_json"))
-            messages.append(item)
+        messages = self._load_messages(session_id)
         summary["messages"] = messages
         return summary
+
+    def load_history_window(
+        self,
+        session_id: str,
+        *,
+        message_limit: int = AI_CONTEXT_MESSAGE_LIMIT,
+        history_char_budget: int = AI_CONTEXT_HISTORY_CHAR_BUDGET,
+        single_message_char_limit: int = AI_CONTEXT_SINGLE_MESSAGE_CHAR_LIMIT,
+    ) -> list[dict[str, Any]]:
+        return bound_history_window(
+            self._load_messages(session_id),
+            message_limit=message_limit,
+            history_char_budget=history_char_budget,
+            single_message_char_limit=single_message_char_limit,
+        )
+
+    def load_prompt_history(
+        self,
+        session_id: str,
+        *,
+        message_limit: int = AI_CONTEXT_MESSAGE_LIMIT,
+        history_char_budget: int = AI_CONTEXT_HISTORY_CHAR_BUDGET,
+        single_message_char_limit: int = AI_CONTEXT_SINGLE_MESSAGE_CHAR_LIMIT,
+    ) -> list[dict[str, str]]:
+        return project_history_for_prompt(
+            self.load_history_window(
+                session_id,
+                message_limit=message_limit,
+                history_char_budget=history_char_budget,
+                single_message_char_limit=single_message_char_limit,
+            )
+        )
 
     def update_session_title(self, session_id: str, *, title: str) -> None:
         next_title = " ".join(str(title or "").split()) or "New chat"
@@ -136,9 +173,10 @@ class SessionStore:
                     "UPDATE sessions SET title = ? WHERE id = ?",
                     (_title_from_question(question), session_id),
                 )
+            assistant_metadata = self._assistant_metadata_with_fingerprint(metadata)
             for role, content, payload in [
                 ("user", question, {}),
-                ("assistant", answer, metadata),
+                ("assistant", answer, assistant_metadata),
             ]:
                 conn.execute(
                     """
@@ -152,9 +190,74 @@ class SessionStore:
                 (session_id,),
             )
 
+    def _load_messages(self, session_id: str) -> list[dict[str, Any]]:
+        self.get_session_summary(session_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, role, content, metadata_json, created_at
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY id ASC
+                """,
+                (session_id,),
+            ).fetchall()
+        messages = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            messages.append(item)
+        return messages
+
+    def _assistant_metadata_with_fingerprint(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(metadata)
+        snapshot = self._resolve_evidence_fingerprint_snapshot()
+        if not snapshot:
+            return payload
+        payload["evidence_fingerprint"] = {
+            **snapshot,
+            "sha256": stable_fingerprint(snapshot),
+        }
+        return payload
+
+    def _resolve_evidence_fingerprint_snapshot(self) -> dict[str, Any] | None:
+        if self._evidence_fingerprint_resolver is not None:
+            snapshot = self._evidence_fingerprint_resolver()
+            return snapshot if isinstance(snapshot, dict) and snapshot else None
+        config = self._config or self._load_matching_default_config()
+        if config is None:
+            return None
+        return _build_evidence_fingerprint_snapshot(config)
+
+    def _load_matching_default_config(self) -> AppConfig | None:
+        config = load_config()
+        try:
+            if config.ai_sessions_db_path.resolve() != self._db_path.resolve():
+                return None
+        except OSError:
+            return None
+        return config
+
 
 def _title_from_question(question: str) -> str:
     clean = " ".join(str(question or "").split())
     if not clean:
         return "New chat"
     return clean[:60]
+
+
+def _build_evidence_fingerprint_snapshot(config: AppConfig) -> dict[str, Any]:
+    return {
+        "dataset": {
+            "csv_dir": config.csv_dir_setting,
+            "csv_files": config.csv_files,
+            "resolved_csv_paths": {
+                table_name: str(path)
+                for table_name, path in sorted(config.resolved_csv_paths().items())
+            },
+        },
+        "config": {
+            "use_reference_now_anchor": config.use_reference_now_anchor,
+            "default_gating_mode": config.default_gating_mode,
+        },
+    }
