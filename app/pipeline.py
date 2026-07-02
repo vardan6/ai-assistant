@@ -8,6 +8,7 @@ the tool list is selected per request from explicit intent.
 """
 from __future__ import annotations
 
+import inspect
 import re
 import time
 from dataclasses import dataclass, field
@@ -358,7 +359,7 @@ class Pipeline:
             )
             synth = synth_resolved.model
             emit(make_trace_event("synthesis_started", "Starting synthesis", details={"tool_names": tool_names}))
-            result = run_agent_loop(
+            result = _invoke_agent_loop_compat(
                 synth,
                 system_prompt=_build_synthesis_prompt(
                     self.dataset_today.isoformat(),
@@ -372,6 +373,12 @@ class Pipeline:
                 context=ToolContext(data=self._data, reference_now=lambda: reference_now),
                 tool_names=tool_names,
                 prompt_history=agent_state.prompt_history,
+                tool_args_transform=lambda name, args: _normalize_tool_args_for_question(
+                    name=name,
+                    args=args,
+                    intent=intent,
+                    question=agent_state.resolved_question or runtime_state["question"],
+                ),
                 event_handler=emit,
             )
             answer = _maybe_override_weather_answer(
@@ -476,6 +483,19 @@ class Pipeline:
 def select_tool_names(intent: dict[str, Any], *, gating_mode: str, available_tools: list[str]) -> list[str]:
     tool_names, _ = _select_tool_names(intent, gating_mode=gating_mode, available_tools=available_tools)
     return tool_names
+
+
+def _invoke_agent_loop_compat(model: Any, /, **kwargs: Any) -> Any:
+    signature = inspect.signature(run_agent_loop)
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+        return run_agent_loop(model, **kwargs)
+
+    supported_kwargs = {
+        name: value
+        for name, value in kwargs.items()
+        if name in signature.parameters
+    }
+    return run_agent_loop(model, **supported_kwargs)
 
 
 def _select_tool_names(
@@ -652,6 +672,31 @@ def _build_question_guidance(intent: dict[str, Any]) -> str:
     if not guidance:
         return ""
     return "Question-specific guidance:\n" + "\n".join(guidance)
+
+
+def _normalize_tool_args_for_question(
+    *,
+    name: str,
+    args: dict[str, Any],
+    intent: dict[str, Any],
+    question: str,
+) -> dict[str, Any]:
+    normalized = dict(args)
+    metric = str(intent.get("metric") or "").strip().lower()
+    clean = str(question or "").strip().lower()
+
+    if name == "alerts" and metric == "downtime" and "resolved alert" in clean:
+        normalized.setdefault("status", "resolved")
+    elif name == "mttr" and metric == "mttr" and "open alert" in clean:
+        normalized["status"] = "open"
+    elif name == "maintenance_cost" and metric == "maintenance_cost":
+        if any(term in clean for term in ("done tickets", "completed maintenance", "completed tickets")):
+            normalized.setdefault("status", "done")
+    elif name == "maintenance_duration" and metric == "maintenance_duration":
+        if any(term in clean for term in ("completed maintenance", "completed tickets", "done tickets")):
+            normalized.setdefault("status", "done")
+
+    return normalized
 
 
 def _normalize_gating_mode(gating_mode: str) -> str:

@@ -49,6 +49,7 @@ def run_agent_loop(
     context: ToolContext,
     tool_names: list[str] | None = None,
     prompt_history: list[dict[str, str]] | None = None,
+    tool_args_transform: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
     event_handler: Callable[[TraceEvent], None] | None = None,
 ) -> AgentResult:
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -97,6 +98,8 @@ def run_agent_loop(
         for call in tool_calls:
             name = str(call.get("name") or "").strip()
             args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            if tool_args_transform is not None:
+                args = tool_args_transform(name, args)
             call_id = str(call.get("id") or name)
 
             started = time.perf_counter()

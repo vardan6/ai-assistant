@@ -98,10 +98,18 @@ def coerce_intent(data: dict[str, Any], *, question: str = "") -> dict[str, Any]
     if "daily yield" in combined:
         _ensure_type(base, "B")
         base["metric"] = "daily_yield"
-    if any(term in combined for term in ("maintenance cost", "maintenance spend", "cost of completed maintenance")):
+    if (
+        any(term in combined for term in ("maintenance cost", "maintenance spend", "cost of completed maintenance"))
+        or ("maintenance" in combined and "cost" in combined)
+        or ("done tickets" in combined and "cost" in combined)
+    ):
         _ensure_type(base, "B")
         base["metric"] = "maintenance_cost"
-    if any(term in combined for term in ("maintenance duration", "duration of completed maintenance")):
+    if (
+        any(term in combined for term in ("maintenance duration", "duration of completed maintenance"))
+        or ("maintenance" in combined and "duration" in combined)
+        or ("completed maintenance" in combined and "average duration" in combined)
+    ):
         _ensure_type(base, "B")
         base["metric"] = "maintenance_duration"
     if any(term in combined for term in ("estimated power loss", "power loss")):
