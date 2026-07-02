@@ -8,6 +8,7 @@ the tool list is selected per request from explicit intent.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -54,14 +55,33 @@ GATING_MODES = {"gated", "bind_all"}
 _ALWAYS_ON_TOOLS = {"plants", "inverters"}
 _TYPE_TOOL_MAP = {
     "A": {"plants", "inverters", "alerts", "maintenance"},
-    "B": {"plants", "inverters", "alerts", "anomalies", "generation_readings", "weather_readings", "daily_yield", "total_yield", "performance_ratio", "mttr"},
+    "B": {
+        "plants",
+        "inverters",
+        "alerts",
+        "anomalies",
+        "generation_readings",
+        "weather_readings",
+        "daily_yield",
+        "total_yield",
+        "performance_ratio",
+        "mttr",
+        "maintenance_cost",
+        "maintenance_duration",
+        "ac_power",
+    },
     "C": {"plants", "inverters", "anomalies"},
 }
 _METRIC_TOOL_MAP = {
+    "ac_power": {"ac_power"},
     "anomalies": {"anomalies"},
     "daily_yield": {"daily_yield"},
+    "maintenance_cost": {"maintenance_cost"},
+    "maintenance_duration": {"maintenance_duration"},
     "mttr": {"mttr"},
+    "downtime": {"alerts"},
     "performance_ratio": {"performance_ratio"},
+    "power_loss": {"anomalies"},
     "tariff_usd_per_kwh": {"plants"},
     "total_yield": {"total_yield"},
     "weather": {"weather_readings"},
@@ -311,7 +331,10 @@ class Pipeline:
 
         def out_of_scope_reply_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
             return {
-                "answer": _build_out_of_scope_reply(runtime_state["intent"]),
+                "answer": _build_out_of_scope_reply(
+                    runtime_state["intent"],
+                    question=runtime_state["question"],
+                ),
                 "stop_reason": "out_of_scope",
                 "fast_path": runtime_state["agent_state"].fast_path,
             }
@@ -348,6 +371,7 @@ class Pipeline:
                 registry=self._registry,
                 context=ToolContext(data=self._data, reference_now=lambda: reference_now),
                 tool_names=tool_names,
+                prompt_history=agent_state.prompt_history,
                 event_handler=emit,
             )
             answer = _maybe_override_weather_answer(
@@ -356,6 +380,17 @@ class Pipeline:
                 intent=intent,
                 tool_calls=result.tool_calls,
                 use_reference_now_anchor=self._config.use_reference_now_anchor,
+                plant_name_for_id=lambda plant_id: _plant_name_for_id(self._data, plant_id),
+            )
+            answer = _maybe_override_inverter_count_answer(
+                answer=answer,
+                question=agent_state.resolved_question or runtime_state["question"],
+                tool_calls=result.tool_calls,
+                plant_name_for_id=lambda plant_id: _plant_name_for_id(self._data, plant_id),
+            )
+            answer = _maybe_annotate_single_plant_answer(
+                answer=answer,
+                tool_calls=result.tool_calls,
                 plant_name_for_id=lambda plant_id: _plant_name_for_id(self._data, plant_id),
             )
             if result.stop_reason == "iteration_limit" and not answer.strip():
@@ -484,10 +519,9 @@ def _backfill_follow_up_intent(
     prompt_history: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
     clean = str(question or "").strip().lower()
-    if clean not in {"how is the plant doing?", "how is the plant doing"}:
-        return intent
-
     metric_context = latest_metric_context(prompt_history, plant_name=recent_plant_name(prompt_history))
+    if not metric_context:
+        metric_context = latest_metric_context(prompt_history)
     if not metric_context:
         return intent
 
@@ -508,12 +542,19 @@ def _backfill_follow_up_intent(
         elif "mean time" in metric_context or "mttr" in metric_context:
             patched["metric"] = "mttr"
 
+    if patched.get("metric") in {"performance_ratio", "daily_yield", "weather", "tariff_usd_per_kwh", "mttr"}:
+        patched["out_of_scope"] = False
+
     return patched
 
 
 def _backfill_static_lookup_intent(intent: dict[str, Any], *, question: str) -> dict[str, Any]:
     clean = str(question or "").strip().lower()
-    if "nameplate capacity" not in clean:
+    should_force_a = "nameplate capacity" in clean or (
+        clean.startswith("how many inverters does ")
+        and (" have?" in clean or clean.endswith(" have"))
+    )
+    if not should_force_a:
         return intent
 
     patched = dict(intent)
@@ -563,9 +604,30 @@ def _build_question_guidance(intent: dict[str, Any]) -> str:
             '- For "best inverter on performance ratio" (or "tops the fleet"), call performance_ratio with aggregate_by="inverter", sort_order="desc", window="all_time". '
             'Report the inverter_id (not plant_id) from the first result, in lowercase (e.g. inv_4137001_04).'
         )
+        guidance.append(
+            '- For "performance ratio at night" or zero-DC/no-generation PR questions, call performance_ratio with dc_voltage="zero". '
+            'If the tool returns verdict="undefined", answer that night-time performance ratio is undefined rather than refusing.'
+        )
     if metric == "total_yield":
         guidance.append(
             "- For total energy generated questions, use total_yield over the requested window instead of raw reading averages."
+        )
+    if metric == "mttr":
+        guidance.append(
+            '- For MTTR questions, call the mttr tool before answering. For "open alerts", call mttr with status="open" '
+            'and use the returned verdict/reason; open alerts have no resolved_at timestamp and therefore no MTTR inputs.'
+        )
+    if metric == "downtime":
+        guidance.append(
+            '- For total downtime questions, call alerts with status="resolved" when the user asks about resolved alerts. '
+            "Use total_downtime_minutes from the alerts result. Do not use mttr; MTTR is mean resolution time, not downtime_minutes."
+        )
+    if metric == "alerts_and_anomalies" or ("A" in types and "C" in types):
+        guidance.append(
+            '- For child-to-sibling inverter chains such as "the inverter in fault, what alert and anomalies", '
+            'first call inverters with status="fault". Then copy the exact inverter_id from that result into both '
+            'alerts(inverter=...) and anomalies(inverter=...). Do not use "*" or "all" for the downstream inverter filter. '
+            'For "what anomalies does it have", do not add an anomaly status filter unless the user explicitly asks for open, active, or unresolved anomalies.'
         )
     if metric == "weather" or ("A" in types and "B" in types):
         guidance.append(
@@ -599,14 +661,34 @@ def _normalize_gating_mode(gating_mode: str) -> str:
     return mode
 
 
-def _build_out_of_scope_reply(intent: dict[str, Any]) -> str:
+def _build_out_of_scope_reply(intent: dict[str, Any], *, question: str = "") -> str:
     metric = str(intent.get("metric") or "").strip().lower()
     if metric in {"revenue", "revenue_loss", "lost_revenue", "downtime_revenue"}:
         return (
             "I can't calculate revenue loss from this dataset because it does not include the business "
             "inputs needed for that number, such as contractual downtime assumptions or lost-energy valuation."
         )
+    if _is_forecast_generation_question(intent, question):
+        return (
+            "I can't answer that from this dataset because it contains historical/observed generation data, "
+            "not forecast data for future periods."
+        )
     return _OUT_OF_SCOPE_REPLY
+
+
+def _is_forecast_generation_question(intent: dict[str, Any], question: str) -> bool:
+    text = " ".join(
+        str(part or "")
+        for part in (
+            question,
+            intent.get("summary"),
+            intent.get("metric"),
+            intent.get("time_range"),
+        )
+    ).lower()
+    forecast_terms = ("forecast", "predict", "projection", "next week", "future")
+    generation_terms = ("generation", "yield", "power", "energy")
+    return any(term in text for term in forecast_terms) and any(term in text for term in generation_terms)
 
 
 def _maybe_override_weather_answer(
@@ -664,7 +746,10 @@ def _render_weather_snapshot_answer(
     latest_timestamp: str,
     plant_name: str | None,
 ) -> str:
-    site = plant_name or f"Plant {latest_reading.get('plant_id')}"
+    plant_id = _normalized_plant_id(latest_reading.get("plant_id"))
+    site = plant_name or (f"Plant {plant_id}" if plant_id else f"Plant {latest_reading.get('plant_id')}")
+    if plant_name and plant_id:
+        site = f"{plant_name} ({plant_id})"
     metrics = [
         ("ambient", latest_reading.get("ambient_temp"), "C"),
         ("module", latest_reading.get("module_temp"), "C"),
@@ -701,6 +786,115 @@ def _plant_name_for_id(data: PandasDataSource, plant_id: Any) -> str | None:
     if matches.empty:
         return None
     return str(matches.iloc[0]["name"]).strip() or None
+
+
+def _maybe_override_inverter_count_answer(
+    *,
+    answer: str,
+    question: str,
+    tool_calls: list[ToolCallRecord],
+    plant_name_for_id: Callable[[Any], str | None],
+) -> str:
+    clean = str(question or "").strip().lower()
+    if not (
+        clean.startswith("how many inverters does ")
+        and (" have?" in clean or clean.endswith(" have"))
+    ):
+        return answer
+
+    for call in reversed(tool_calls):
+        if call.name != "inverters" or not isinstance(call.result, dict):
+            continue
+        matched = call.result.get("matched")
+        if not isinstance(matched, int):
+            continue
+        plant_id = _single_result_plant_id(call.result)
+        if plant_id is None:
+            continue
+        plant_name = plant_name_for_id(plant_id) or f"Plant {plant_id}"
+        return f"{plant_name} has {matched} inverters."
+
+    return answer
+
+
+def _single_result_plant_id(result: dict[str, Any]) -> str | None:
+    inverters = result.get("inverters")
+    if not isinstance(inverters, list) or not inverters:
+        return None
+
+    plant_ids = {
+        _normalized_plant_id(item.get("plant_id"))
+        for item in inverters
+        if isinstance(item, dict)
+    }
+    plant_ids.discard(None)
+    if len(plant_ids) != 1:
+        return None
+    return str(next(iter(plant_ids)))
+
+
+def _maybe_annotate_single_plant_answer(
+    *,
+    answer: str,
+    tool_calls: list[ToolCallRecord],
+    plant_name_for_id: Callable[[Any], str | None],
+) -> str:
+    plant_ids = sorted({
+        plant_id
+        for call in tool_calls
+        for plant_id in _extract_plant_ids(call.args) | _extract_plant_ids(call.result)
+        if plant_id
+    })
+    if len(plant_ids) != 1:
+        return answer
+
+    plant_id = plant_ids[0]
+    if _answer_mentions_plant_id(answer, plant_id):
+        return answer
+
+    plant_name = plant_name_for_id(plant_id)
+    if plant_name:
+        pattern = re.compile(rf"\b{re.escape(plant_name)}\b", re.IGNORECASE)
+        if pattern.search(answer):
+            return pattern.sub(f"{plant_name} ({plant_id})", answer, count=1)
+
+    answer = answer.rstrip()
+    if answer.endswith("."):
+        return f"{answer} Plant ID: {plant_id}."
+    return f"{answer} Plant ID: {plant_id}."
+
+
+def _extract_plant_ids(value: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == "plant_id":
+                normalized = _normalized_plant_id(nested)
+                if normalized:
+                    found.add(normalized)
+            found.update(_extract_plant_ids(nested))
+        return found
+    if isinstance(value, list):
+        for item in value:
+            found.update(_extract_plant_ids(item))
+    return found
+
+
+def _answer_mentions_plant_id(answer: str, plant_id: str) -> bool:
+    patterns = (
+        rf"\({re.escape(plant_id)}\)",
+        rf"\bplant_id\b\D*{re.escape(plant_id)}\b",
+        rf"\bplant id\b\D*{re.escape(plant_id)}\b",
+    )
+    return any(re.search(pattern, answer, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _normalized_plant_id(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
 
 def _telemetry(
     *,

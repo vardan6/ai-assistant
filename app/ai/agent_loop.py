@@ -48,14 +48,22 @@ def run_agent_loop(
     registry: ToolRegistry,
     context: ToolContext,
     tool_names: list[str] | None = None,
+    prompt_history: list[dict[str, str]] | None = None,
     event_handler: Callable[[TraceEvent], None] | None = None,
 ) -> AgentResult:
-    from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
     schemas = registry.bind_schemas(tool_names)
     bound_model = model.bind_tools(schemas) if schemas else model
 
-    messages: list[Any] = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+    messages: list[Any] = [SystemMessage(content=system_prompt)]
+    for prior in prompt_history or []:
+        content = str(prior.get("content", "")).strip()
+        if not content:
+            continue
+        role = prior.get("role", "user")
+        messages.append(AIMessage(content=content) if role == "assistant" else HumanMessage(content=content))
+    messages.append(HumanMessage(content=user_prompt))
     executed: list[ToolCallRecord] = []
     trace_events: list[TraceEvent] = []
     final_response = None

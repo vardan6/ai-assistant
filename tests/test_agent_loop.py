@@ -25,7 +25,8 @@ class ScriptedModel:
         self.bound_schemas = schemas
         return self
 
-    def invoke(self, messages):  # noqa: ARG002
+    def invoke(self, messages):
+        self.last_messages = list(messages)
         resp = self._responses[self._i]
         self._i += 1
         return resp
@@ -53,3 +54,36 @@ def test_loop_executes_tool_then_answers():
     # Tool schemas were bound to the model.
     assert model.bound_schemas
     assert "plants" in [schema["function"]["name"] for schema in model.bound_schemas]
+
+
+def test_loop_threads_prior_history_into_messages():
+    """Prior turns must reach the synthesis model so pronouns ('its') resolve.
+
+    Regression for MT-D2: 'what is its id?' after a Rajasthan Solar Park turn must
+    not lose the prior-turn referent.
+    """
+    model = ScriptedModel()
+    # No tool call needed; answer straight away from threaded context.
+    model._responses = [SimpleNamespace(content="4135001", tool_calls=[])]
+    registry = build_registry()
+    history = [
+        {"role": "user", "content": "average daily yield of Rajasthan Solar Park last week?"},
+        {"role": "assistant", "content": "Rajasthan Solar Park averaged 123354.2 over 7 days."},
+    ]
+    run_agent_loop(
+        model,
+        system_prompt="sys",
+        user_prompt="what is its id?",
+        registry=registry,
+        context=_ctx(),
+        prompt_history=history,
+    )
+    contents = [getattr(m, "content", "") for m in model.last_messages]
+    # System prompt, both prior turns, then the current question — in order.
+    assert "sys" in contents[0]
+    assert any("Rajasthan Solar Park" in c for c in contents[1:-1])
+    assert contents[-1] == "what is its id?"
+    types = [type(m).__name__ for m in model.last_messages]
+    assert types[0] == "SystemMessage"
+    assert types[-1] == "HumanMessage"
+    assert "AIMessage" in types  # prior assistant turn preserved as AIMessage

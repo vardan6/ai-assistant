@@ -1,4 +1,6 @@
 """Tests for A1 (D3) fix: combined type+cause filter and matched_inverter_ids output."""
+import pytest
+
 from app.config import load_config
 from app.data import PandasDataSource
 from app.tools import ToolContext, build_registry
@@ -43,3 +45,47 @@ def test_anomalies_matched_inverter_ids_present_for_unfiltered_query():
     result = registry.invoke("anomalies", {}, _ctx())
     assert "matched_inverter_ids" in result
     assert isinstance(result["matched_inverter_ids"], list)
+
+
+def test_anomalies_reports_total_estimated_power_loss_for_matched_frame():
+    registry = build_registry()
+    result = registry.invoke(
+        "anomalies",
+        {"status": "open", "anomaly_type": "hotspot", "cause": "soiling"},
+        _ctx(),
+    )
+
+    assert result["matched"] == 2
+    assert result["total_estimated_power_loss_kw"] == pytest.approx(0.087)
+    assert result["summary"]["total_estimated_power_loss_kw"] == pytest.approx(0.087)
+
+
+def test_anomalies_can_filter_for_linked_maintenance_tickets():
+    registry = build_registry()
+    result = registry.invoke("anomalies", {"linked_to_maintenance": True}, _ctx())
+
+    assert result["ok"] is True
+    assert result["matched"] == 2
+    assert sorted(result["anomaly_ids"]) == [1, 4]
+    assert result["total_estimated_power_loss_kw"] == pytest.approx(208.414)
+    assert all(row["maintenance_ticket_id"] is not None for row in result["anomalies"])
+
+
+def test_anomalies_can_filter_for_missing_maintenance_tickets():
+    registry = build_registry()
+    result = registry.invoke(
+        "anomalies",
+        {
+            "status": "open",
+            "anomaly_type": "hotspot",
+            "cause": "soiling",
+            "linked_to_maintenance": False,
+        },
+        _ctx(),
+    )
+
+    assert result["ok"] is True
+    assert result["matched"] == 2
+    assert sorted(result["anomaly_ids"]) == [7, 55]
+    assert result["total_estimated_power_loss_kw"] == pytest.approx(0.087)
+    assert all(row["maintenance_ticket_id"] is None for row in result["anomalies"])

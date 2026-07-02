@@ -6,7 +6,13 @@ from app.ai import AgentResult, ToolCallRecord, UsageSnapshot, run_agent_loop
 from app.ai.intent_schema import coerce_intent
 from app.config import load_config
 from app.data import PandasDataSource
-from app.pipeline import Pipeline, _build_synthesis_prompt, select_tool_names
+from app.pipeline import (
+    Pipeline,
+    _build_synthesis_prompt,
+    _maybe_annotate_single_plant_answer,
+    _maybe_override_inverter_count_answer,
+    select_tool_names,
+)
 from app.schema_card import build_schema_card
 from app.tools import ToolContext, build_registry
 
@@ -50,7 +56,10 @@ def test_gated_tool_selection_uses_generous_subset_and_resolvers(registry):
         "daily_yield",
         "performance_ratio",
         "mttr",
+        "maintenance_cost",
+        "maintenance_duration",
         "total_yield",
+        "ac_power",
         "generation_readings",
         "inverters",
         "plants",
@@ -220,7 +229,7 @@ def test_pipeline_replaces_empty_iteration_limit_answer(monkeypatch):
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         return AgentResult(
             answer="",
             tool_calls=[],
@@ -276,7 +285,7 @@ def test_pipeline_emits_trace_for_gated_empty_classification_fallback(monkeypatc
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         assert tool_names == ["inverters", "plants"]
         return AgentResult(
             answer="I couldn't classify that cleanly, so I checked the plant and inverter records first.",
@@ -332,7 +341,7 @@ def test_pipeline_routes_dispute_turn_into_data_path_even_if_classifier_marks_ou
         calls.append(purpose)
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         assert tool_names == ["inverters", "plants"]
         return AgentResult(
             answer="Let me re-check that claim.",
@@ -382,7 +391,7 @@ def test_pipeline_emits_structured_prior_answer_verdict_for_dispute_turn(monkeyp
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         return AgentResult(
             answer="INV_4136001_08 has the larger estimated power loss at 55.0 kW.",
             tool_calls=[
@@ -480,7 +489,7 @@ def test_prior_answer_verdict_uses_stored_evidence_not_prior_answer_wording(monk
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         return AgentResult(
             answer="The re-check returns the same two hotspot anomalies caused by soiling.",
             tool_calls=[
@@ -581,7 +590,7 @@ def test_pipeline_loads_session_context_from_store_when_session_id_is_provided(m
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         observed["user_prompt"] = user_prompt
         return AgentResult(
             answer="Rajasthan Solar Park still has two open hotspot anomalies.",
@@ -714,7 +723,7 @@ def test_pipeline_backfills_metric_type_for_ambiguous_plant_follow_up(monkeypatc
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         observed["tool_names"] = tool_names
         observed["user_prompt"] = user_prompt
         return AgentResult(
@@ -740,6 +749,91 @@ def test_pipeline_backfills_metric_type_for_ambiguous_plant_follow_up(monkeypatc
         "Tell me about Rajasthan Solar Park's current performance ratio. Follow-up: How is the plant doing?"
     )
     assert observed["user_prompt"] == result.intent_meta["resolved_question"]
+    assert "performance_ratio" in observed["tool_names"]
+
+
+def test_pipeline_keeps_context_for_night_pr_recheck_follow_up(monkeypatch):
+    pipeline = Pipeline(load_config(), session_store=SimpleNamespace(
+        load_history_window=lambda session_id: [] if session_id == "session-123" else [],
+        load_prompt_history=lambda session_id: [
+            {"role": "user", "content": "Average performance ratio at night."},
+            {
+                "role": "assistant",
+                "content": (
+                    "I can only compute performance ratio over standard windows. "
+                    "If you define night, I can re-check using the closest available window."
+                ),
+            },
+        ] if session_id == "session-123" else [],
+    ))
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": [],
+                    "entities": {"plants": [], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "",
+                    "out_of_scope": True,
+                    "confidence": 0.4,
+                    "summary": "Missing business inputs",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    observed: dict[str, object] = {}
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
+        observed["tool_names"] = tool_names
+        observed["user_prompt"] = user_prompt
+        return AgentResult(
+            answer="Night-time performance ratio is undefined because zero-DC readings have null PR.",
+            tool_calls=[
+                ToolCallRecord(
+                    name="performance_ratio",
+                    args={"window": "today", "dc_voltage": "zero"},
+                    result={"ok": True, "verdict": "undefined", "matched_readings": 0, "results": []},
+                    iteration=1,
+                    latency_ms=10,
+                )
+            ],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer(
+        "night (e.g., 19:00-06:00), re-check using the closest available window",
+        session_id="session-123",
+    )
+
+    assert result.intent_meta["turn_kind"] == "follow_up"
+    assert result.intent_meta["graph_nodes"] == [
+        "load_session_context",
+        "route_local",
+        "classify_intent",
+        "resolve_follow_up",
+        "run_tool_loop",
+    ]
+    assert result.intent["types"] == ["B"]
+    assert result.intent["metric"] == "performance_ratio"
+    assert result.intent["out_of_scope"] is False
+    assert "Average performance ratio at night." in observed["user_prompt"]
     assert "performance_ratio" in observed["tool_names"]
 
 
@@ -770,7 +864,7 @@ def test_pipeline_backfills_static_lookup_type_for_nameplate_capacity(monkeypatc
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         observed["tool_names"] = tool_names
         return AgentResult(
             answer="Gujarat Solar Farm has 18.5 MW of nameplate capacity.",
@@ -791,3 +885,140 @@ def test_pipeline_backfills_static_lookup_type_for_nameplate_capacity(monkeypatc
 
     assert result.intent["types"] == ["A", "B"]
     assert "plants" in observed["tool_names"]
+
+
+def test_pipeline_backfills_static_lookup_type_for_inverter_count(monkeypatch):
+    pipeline = Pipeline(load_config())
+
+    class StubIntentService:
+        def parse(self, user_prompt, *, model, context_summary=""):  # noqa: ARG002
+            return {
+                "intent": {
+                    "types": ["B"],
+                    "entities": {"plants": ["Rajasthan Solar Park"], "inverters": [], "alerts": [], "anomalies": [], "maintenance": []},
+                    "time_range": None,
+                    "metric": "",
+                    "out_of_scope": False,
+                    "confidence": 0.9,
+                    "summary": "Count inverters at Rajasthan Solar Park",
+                },
+                "parse_errors": [],
+                "provider_name": "fake-intent-model",
+                "latency_ms": 5,
+                "fast_path": "",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            }
+
+    observed: dict[str, object] = {}
+
+    def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
+        return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
+
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
+        observed["tool_names"] = tool_names
+        return AgentResult(
+            answer="Rajasthan Solar Park has 10 inverters.",
+            tool_calls=[],
+            iterations=1,
+            stop_reason="final_answer",
+            trace_events=[],
+            usage=UsageSnapshot(),
+            elapsed_ms=15,
+            model_name="synthesis-model",
+        )
+
+    pipeline._intent_service = StubIntentService()
+    monkeypatch.setattr("app.pipeline.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("app.pipeline.run_agent_loop", fake_run_agent_loop)
+
+    result = pipeline.answer("How many inverters does Rajasthan have?")
+
+    assert result.intent["types"] == ["A", "B"]
+    assert "inverters" in observed["tool_names"]
+
+
+def test_single_plant_answer_annotation_inserts_name_and_id():
+    answer = _maybe_annotate_single_plant_answer(
+        answer="Rajasthan Solar Park has 15 unresolved anomalies.",
+        tool_calls=[
+            ToolCallRecord(
+                name="anomalies",
+                args={"plant": "Rajasthan Solar Park", "status": "unresolved"},
+                result={"ok": True, "anomalies": [{"plant_id": 4135001}]},
+                iteration=1,
+                latency_ms=5,
+            )
+        ],
+        plant_name_for_id=lambda plant_id: "Rajasthan Solar Park" if str(plant_id) == "4135001" else None,
+    )
+
+    assert answer == "Rajasthan Solar Park (4135001) has 15 unresolved anomalies."
+
+
+def test_inverter_count_answer_uses_filtered_match_count():
+    answer = _maybe_override_inverter_count_answer(
+        answer="Plant 4135001 has 30 inverters.",
+        question="How many inverters does Rajasthan have?",
+        tool_calls=[
+            ToolCallRecord(
+                name="inverters",
+                args={"plant": "Rajasthan Solar Park"},
+                result={
+                    "ok": True,
+                    "total_inverters": 30,
+                    "matched": 10,
+                    "inverters": [
+                        {"plant_id": 4135001, "inverter_id": "INV_4135001_01"},
+                        {"plant_id": 4135001, "inverter_id": "INV_4135001_02"},
+                    ],
+                },
+                iteration=1,
+                latency_ms=5,
+            )
+        ],
+        plant_name_for_id=lambda plant_id: "Rajasthan Solar Park" if str(plant_id) == "4135001" else None,
+    )
+
+    assert answer == "Rajasthan Solar Park has 10 inverters."
+
+
+def test_single_plant_answer_annotation_skips_multi_plant_result_sets():
+    answer = _maybe_annotate_single_plant_answer(
+        answer="Rajasthan Solar Park and Gujarat Solar Farm both appear in the results.",
+        tool_calls=[
+            ToolCallRecord(
+                name="daily_yield",
+                args={"window": "last_week", "aggregate_by": "plant"},
+                result={
+                    "ok": True,
+                    "results": [
+                        {"plant_id": "4135001", "avg_daily_yield": 123354.2},
+                        {"plant_id": "4136001", "avg_daily_yield": 68649.95},
+                    ],
+                },
+                iteration=1,
+                latency_ms=5,
+            )
+        ],
+        plant_name_for_id=lambda plant_id: None,
+    )
+
+    assert answer == "Rajasthan Solar Park and Gujarat Solar Farm both appear in the results."
+
+
+def test_single_plant_answer_annotation_does_not_treat_inverter_ids_as_plant_id_mentions():
+    answer = _maybe_annotate_single_plant_answer(
+        answer="Rajasthan Solar Park has unresolved anomalies on INV_4135001_05 and INV_4135001_10.",
+        tool_calls=[
+            ToolCallRecord(
+                name="anomalies",
+                args={"plant": "Rajasthan Solar Park", "status": "unresolved"},
+                result={"ok": True, "anomalies": [{"plant_id": 4135001, "inverter_id": "INV_4135001_05"}]},
+                iteration=1,
+                latency_ms=5,
+            )
+        ],
+        plant_name_for_id=lambda plant_id: "Rajasthan Solar Park" if str(plant_id) == "4135001" else None,
+    )
+
+    assert answer.startswith("Rajasthan Solar Park (4135001)")

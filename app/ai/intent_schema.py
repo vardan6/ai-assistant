@@ -82,15 +82,34 @@ def coerce_intent(data: dict[str, Any], *, question: str = "") -> dict[str, Any]
     if any(term in combined for term in ("feed-in tariff", "feed in tariff", " tariff")):
         _ensure_type(base, "B")
         base["metric"] = "tariff_usd_per_kwh"
+    if "full health summary" in combined or "health summary" in combined:
+        _ensure_type(base, "A")
+        _ensure_type(base, "B")
+        _ensure_type(base, "C")
     if any(term in combined for term in ("performance ratio", "performing worst", "performing best")):
         _ensure_type(base, "B")
         base["metric"] = "performance_ratio"
+    if "ac power" in combined:
+        _ensure_type(base, "B")
+        base["metric"] = "ac_power"
     if any(term in combined for term in ("total yield", "total energy", "energy generated")):
         _ensure_type(base, "B")
         base["metric"] = "total_yield"
     if "daily yield" in combined:
         _ensure_type(base, "B")
         base["metric"] = "daily_yield"
+    if any(term in combined for term in ("maintenance cost", "maintenance spend", "cost of completed maintenance")):
+        _ensure_type(base, "B")
+        base["metric"] = "maintenance_cost"
+    if any(term in combined for term in ("maintenance duration", "duration of completed maintenance")):
+        _ensure_type(base, "B")
+        base["metric"] = "maintenance_duration"
+    if any(term in combined for term in ("estimated power loss", "power loss")):
+        _ensure_type(base, "B")
+        base["metric"] = "power_loss"
+    if "downtime" in combined:
+        _ensure_type(base, "B")
+        base["metric"] = "downtime"
     if any(term in combined for term in ("mean time to resolve", "mttr")):
         _ensure_type(base, "B")
         base["metric"] = "mttr"

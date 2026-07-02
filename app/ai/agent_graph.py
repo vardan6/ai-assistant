@@ -39,6 +39,14 @@ _AMBIGUOUS_PLANT_QUESTIONS = {
     "how is the plant doing?",
     "how is the plant doing",
 }
+_AFFIRMATIVE_FOLLOW_UPS = {
+    "yes",
+    "yes please",
+    "please",
+    "ok",
+    "okay",
+    "sure",
+}
 _METRIC_CONTEXT_CUES = (
     "performance ratio",
     "daily yield",
@@ -175,6 +183,11 @@ def resolve_follow_up_question(question: str, prompt_history: list[PromptHistory
         anchor = previous_user or previous_assistant
         if anchor:
             return f"{anchor} Follow-up: {clean}"
+
+    if clean_lower in _AFFIRMATIVE_FOLLOW_UPS or re.search(r"\b(?:re-?check|closest available|use the closest|using the closest)\b", clean_lower):
+        anchor_parts = [part for part in (previous_user, previous_assistant) if part]
+        if anchor_parts:
+            return " ".join([*anchor_parts, f"Follow-up request: {clean}"])
 
     if any(token in clean_lower for token in ("those", "that one", "that plant", "same one", "previous", "earlier", "again")):
         anchor_parts = [part for part in (previous_user, previous_assistant) if part]
@@ -341,7 +354,7 @@ def plan_graph_nodes(
     if tool_free:
         nodes.append("tool_free_reply")
         return nodes
-    if out_of_scope:
+    if out_of_scope and turn_kind not in {"follow_up", "dispute_correction"}:
         nodes.append("out_of_scope_reply")
         return nodes
     nodes.append("run_tool_loop")

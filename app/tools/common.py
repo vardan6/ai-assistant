@@ -90,7 +90,12 @@ def resolve_inverter_ids(context: ToolContext, inverter: str | None) -> list[str
 def filter_exact(frame: pd.DataFrame, column: str, value: str | int | None) -> pd.DataFrame:
     if value is None or column not in frame.columns:
         return frame
-    needle = str(value).strip().lower()
+    if isinstance(value, str):
+        needle = value.strip().lower()
+        if needle in {"", "*", "all"}:
+            return frame
+    else:
+        needle = str(value).strip().lower()
     return frame[frame[column].astype(str).str.lower() == needle]
 
 

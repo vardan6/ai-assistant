@@ -187,6 +187,32 @@ is separate and runs through the live server/chat API.
 dependency. The `rg` command is the lightweight docs-hygiene check for stray copy artifacts in
 durable documentation.
 
+### Recommended Gate Run With Saved Artifacts
+
+For a full local gate pass with reviewable artifacts, activate the local venv
+and redirect both `stdout` and `stderr` into files:
+
+```bash
+source .venv/bin/activate
+python -m pytest -q > pytest-gint1.txt 2>&1
+python -m compileall app scripts > compileall-gint1.txt 2>&1
+rg -n "</content>|</invoke>" README.md docs > docs-hygiene-gint1.txt 2>&1
+./run-case-replay.sh --gate gate1 > gate1-replay.txt 2>&1
+./run-case-replay.sh --gate gate2 > gate2-replay.txt 2>&1
+./run-case-replay.sh --transcript MT-D3-DISPUTE > mt-d3-dispute.txt 2>&1
+```
+
+This sequence maps to the current gate plan:
+
+- `G-INT1` — `pytest`, `compileall`, and docs hygiene.
+- `G-INT2` — replay `gate1`, replay `gate2`, and the multi-turn dispute transcript.
+
+If you want to watch the replay live and still keep a file artifact, use:
+
+```bash
+./run-case-replay.sh --gate gate1 2>&1 | tee gate1-replay.txt
+```
+
 ## Case Replay Gates
 
 The replay harness has two behavioural gates:
@@ -230,19 +256,30 @@ The replay CLI supports:
 
 - `--gate gate1`
 - `--gate gate2`
+- `--gate gate2verify` for the focused `G2-FIX-11` fresh-port verification subset
 - `--case CASE_ID` to run one or more specific single-turn cases
 - `--transcript TRANSCRIPT_ID` to run multi-turn transcript fixtures
 - `--gating-mode gated|bind_all`
 - `--server URL`
+- `--request-timeout SECONDS`
 
 Examples:
 
 ```bash
 ./run-case-replay.sh --gate gate1
 ./run-case-replay.sh --gate gate2 --gating-mode bind_all
+./run-case-replay.sh --gate gate2verify --request-timeout 45
 ./run-case-replay.sh --case D3 --case X4
 ./run-case-replay.sh --transcript MT-D3-DISPUTE
 ```
+
+The wrapper also honors:
+
+- `AI_ASSISTANT_STARTUP_TIMEOUT_SECS` to allow longer clean-port startup waits
+- `AI_ASSISTANT_READINESS_TIMEOUT_SECS` to control each readiness probe timeout
+
+If wrapper startup fails, it now prints the tail of the captured `uvicorn` log to
+help distinguish slow startup from an actual server error.
 
 ### Output
 
@@ -316,9 +353,9 @@ Recommended order:
 Example:
 
 ```bash
-./run-case-replay.sh --gate gate1 | tee gate1-replay.txt
-./run-case-replay.sh --gate gate2 | tee gate2-replay.txt
-./run-case-replay.sh --transcript MT-D3-DISPUTE | tee mt-d3-dispute.txt
+./run-case-replay.sh --gate gate1 > gate1-replay.txt 2>&1
+./run-case-replay.sh --gate gate2 > gate2-replay.txt 2>&1
+./run-case-replay.sh --transcript MT-D3-DISPUTE > mt-d3-dispute.txt 2>&1
 ```
 
 After that:

@@ -33,3 +33,15 @@
 - **Dataset reloads are atomic for new requests only.** Rebuild the pipeline only after validating
   the full resolved dataset; keep the old pipeline alive for in-flight requests and on failed
   reload attempts.
+- **Aggregates are deterministic in tools, never synthesized.** Sums/means/maxes (downtime,
+  maintenance cost/duration, anomaly power-loss, AC-power mean/max) must be computed in pandas and
+  returned as fields; do not let the LLM sum a possibly-truncated record list. Add **general,
+  composable** aggregates, not one bespoke reducer per eval question — that overfits the replay
+  oracle. Rationale + change set: `docs/archive/gate2-failure-triage-2026-07-01.md`.
+- **MTTR is mean resolved-alert duration, not downtime.** Open/unresolved alerts have no
+  `resolved_at`, so `mttr(status="open")` returns a structured `verdict="no_inputs"` result. Total
+  downtime questions use `alerts.total_downtime_minutes`, not `mttr`.
+- **`total_*` is fleet-wide; `matched` is the filtered count.** Entity tools expose both; under a
+  plant/inverter filter only `matched` (and `*_ids`) describe the filtered set. Never label
+  `total_alerts`/`total_tickets` as a plant-local total — that field-name adjacency caused the X1
+  wrong-totals bug. Prefer not emitting `total_*` next to `matched` when a filter is applied.

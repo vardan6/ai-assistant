@@ -44,19 +44,22 @@ def maintenance_lookup(
     type: str | None = None,
 ) -> dict[str, Any]:
     source = context.data.table("maintenance")
+    filters_applied = any(value is not None for value in (plant, inverter, status, priority, type))
     frame = filter_plant(source, context, plant)
     frame = filter_exact(frame, "inverter_id", inverter)
     frame = filter_exact(frame, "status", status)
     frame = filter_exact(frame, "priority", priority)
     frame = filter_exact(frame, "type", type)
-    return {
+    payload = {
         "ok": True,
-        "total_tickets": int(len(source)),
         "matched": int(len(frame)),
         "status_counts": counts(frame, "status"),
         "priority_counts": counts(frame, "priority"),
         "maintenance": records(frame, _FIELDS),
     }
+    total_key = "total_tickets_all_plants" if filters_applied else "total_tickets"
+    payload[total_key] = int(len(source))
+    return payload
 
 
 def register(registry: ToolRegistry) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import inspect
 from typing import Any, Callable
 
 from ..data import DataSource
@@ -96,6 +97,9 @@ class ToolRegistry:
         spec = self._specs.get(name)
         if spec is None:
             return {"ok": False, "error": f"Unknown tool: {name}"}
+        arg_error = _validate_tool_args(spec, args)
+        if arg_error is not None:
+            return arg_error
         try:
             result = spec.handler(context, **(args or {}))
         except Exception as exc:  # tools must never crash the loop
@@ -108,3 +112,56 @@ class ToolRegistry:
 
 def _empty_object_schema() -> dict[str, Any]:
     return {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+def _validate_tool_args(spec: ToolSpec, args: dict[str, Any] | None) -> dict[str, Any] | None:
+    if args is None:
+        return None
+    if not isinstance(args, dict):
+        return _invalid_tool_args_error(
+            spec.name,
+            message=f"Tool '{spec.name}' expects arguments as a JSON object.",
+        )
+
+    signature = inspect.signature(spec.handler)
+    accepted_kwargs: set[str] = set()
+    accepts_var_kwargs = False
+    for index, param in enumerate(signature.parameters.values()):
+        if index == 0:
+            continue
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            accepts_var_kwargs = True
+            continue
+        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+            accepted_kwargs.add(param.name)
+
+    unknown_args = sorted(name for name in args if name not in accepted_kwargs)
+    if unknown_args and not accepts_var_kwargs:
+        label = "argument" if len(unknown_args) == 1 else "arguments"
+        return _invalid_tool_args_error(
+            spec.name,
+            message=f"Unknown {label} for tool '{spec.name}': {', '.join(unknown_args)}.",
+            unknown_args=unknown_args,
+        )
+
+    try:
+        signature.bind(None, **args)
+    except TypeError as exc:
+        return _invalid_tool_args_error(spec.name, message=str(exc))
+    return None
+
+
+def _invalid_tool_args_error(
+    tool_name: str,
+    *,
+    message: str,
+    unknown_args: list[str] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "code": "invalid_arguments",
+        "tool": tool_name,
+        "message": message,
+    }
+    if unknown_args:
+        error["unknown_args"] = unknown_args
+    return {"ok": False, "error": error}

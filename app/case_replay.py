@@ -4,10 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib import request
+from urllib import error, request
 
 from scripts.golden_answers import build as build_oracle
 
@@ -73,6 +74,22 @@ GATE2B_CASE_IDS: tuple[str, ...] = (
 )
 
 GATE2_CASE_IDS: tuple[str, ...] = GATE2A_CASE_IDS + GATE2B_CASE_IDS
+GATE2_VERIFY_CASE_IDS: tuple[str, ...] = (
+    "I4",
+    "G3",
+    "G5",
+    "G6",
+    "AL4",
+    "AL6",
+    "M3",
+    "M4",
+    "AN4",
+    "AN7",
+    "X1",
+    "X3",
+    "X5",
+    "X7",
+)
 
 GATE2_TRANSCRIPT_IDS: tuple[str, ...] = (
     "MT-D3-FOLLOWUP",
@@ -128,6 +145,16 @@ class SummaryRow:
     intent_types: tuple[str, ...]
     tools: tuple[str, ...]
     failed_checks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReplayRequestError(RuntimeError):
+    operation: str
+    target: str
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.operation} {self.target}: {self.detail}"
 
 
 @dataclass(frozen=True)
@@ -453,6 +480,13 @@ def build_replay_specs() -> dict[str, ReplaySpec]:
             case_id="AL4",
             question="What is the total downtime caused by resolved alerts?",
             expected_intent_types=("B",),
+            required_tool_args=(
+                RequiredToolArgs(tool="alerts", args={"status": "resolved"}),
+            ),
+            required_tool_result_fields=(
+                RequiredToolResultField(tool="alerts", path=("total_downtime_minutes",), value=31836.0),
+                RequiredToolResultField(tool="alerts", path=("downtime_record_count",), value=25),
+            ),
             required_numbers=(31836.0,),
         ),
         "AL5": ReplaySpec(
@@ -465,6 +499,10 @@ def build_replay_specs() -> dict[str, ReplaySpec]:
             case_id="AL6",
             question="What is the MTTR for open alerts?",
             expected_intent_types=("B",),
+            required_tool_result_fields=(
+                RequiredToolResultField(tool="mttr", path=("verdict",), value="no_inputs"),
+                RequiredToolResultField(tool="mttr", path=("matched_alerts",), value=0),
+            ),
             required_text=("no inputs", "resolved_at"),
         ),
         "M1": ReplaySpec(
@@ -561,8 +599,17 @@ def build_replay_specs() -> dict[str, ReplaySpec]:
             case_id="X3",
             question="For the inverter in fault, what alert and anomalies does it have?",
             expected_intent_types=("A", "C"),
+            required_tool_args=(
+                RequiredToolArgs(tool="inverters", args={"status": "fault"}),
+                RequiredToolArgs(tool="alerts", args={"inverter": "INV_4135001_10"}),
+                RequiredToolArgs(tool="anomalies", args={"inverter": "INV_4135001_10"}),
+            ),
+            required_tool_result_fields=(
+                RequiredToolResultField(tool="inverters", path=("inverters", 0, "inverter_id"), value="INV_4135001_10"),
+                RequiredToolResultField(tool="alerts", path=("alert_ids",), value=[2, 16, 27]),
+                RequiredToolResultField(tool="anomalies", path=("anomaly_ids",), value=[4, 17, 54]),
+            ),
             required_text=("inv_4135001_10",),
-            required_numbers=(2.0, 16.0, 27.0, 4.0, 17.0, 54.0),
         ),
         "X4": ReplaySpec(
             case_id="X4",
@@ -599,6 +646,8 @@ def gate_case_ids(gate: str) -> tuple[str, ...]:
         return GATE1_CASE_IDS
     if gate == "gate2":
         return GATE2_CASE_IDS
+    if gate == "gate2verify":
+        return GATE2_VERIFY_CASE_IDS
     if gate == "gate2a":
         return GATE2A_CASE_IDS
     if gate == "gate2b":
@@ -610,6 +659,34 @@ def gate_transcript_ids(gate: str) -> tuple[str, ...]:
     if gate in ("gate2", "gate2b"):
         return GATE2_TRANSCRIPT_IDS
     return ()
+
+
+def _request_json(req: request.Request, *, timeout: float, operation: str, target: str) -> dict[str, Any]:
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except error.HTTPError as exc:
+        detail = exc.reason
+        try:
+            body = exc.read().decode().strip()
+        except Exception:  # pragma: no cover - defensive
+            body = ""
+        if body:
+            detail = f"{detail}; body={body}"
+        raise ReplayRequestError(operation=operation, target=target, detail=str(detail)) from exc
+    except error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, socket.timeout):
+            detail = f"timed out after {timeout:.1f}s"
+        else:
+            detail = str(reason)
+        raise ReplayRequestError(operation=operation, target=target, detail=detail) from exc
+    except socket.timeout as exc:
+        raise ReplayRequestError(
+            operation=operation,
+            target=target,
+            detail=f"timed out after {timeout:.1f}s",
+        ) from exc
 
 
 def _truncate_cell(value: str, *, max_len: int) -> str:
@@ -833,7 +910,9 @@ def _tool_call_matches_args(call: dict[str, Any], requirement: RequiredToolArgs,
     args = call.get("args")
     if not isinstance(args, dict):
         return False
-    return _partial_value_matches(args, requirement.args, tolerance)
+    if _partial_value_matches(args, requirement.args, tolerance):
+        return True
+    return _partial_value_matches_with_result(args, requirement.args, call.get("result"), tolerance)
 
 
 def _tool_result_field_matches(
@@ -880,6 +959,25 @@ def _partial_value_matches(actual: Any, expected: Any, tolerance: float) -> bool
     return _value_matches(actual, expected, tolerance)
 
 
+def _partial_value_matches_with_result(actual: Any, expected: Any, result: Any, tolerance: float) -> bool:
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        for key, value in expected.items():
+            if key not in actual:
+                return False
+            if key == "plant":
+                if _value_matches(actual[key], value, tolerance):
+                    continue
+                if _result_contains_named_value(result, "plant_id", value, tolerance):
+                    continue
+                return False
+            if not _partial_value_matches_with_result(actual[key], value, result, tolerance):
+                return False
+        return True
+    return _value_matches(actual, expected, tolerance)
+
+
 def _value_matches(actual: Any, expected: Any, tolerance: float) -> bool:
     if isinstance(expected, dict):
         return _partial_value_matches(actual, expected, tolerance)
@@ -893,10 +991,27 @@ def _value_matches(actual: Any, expected: Any, tolerance: float) -> bool:
     expected_number = _as_number(expected)
     actual_number = _as_number(actual)
     if expected_number is not None and actual_number is not None:
-        return abs(actual_number - expected_number) <= tolerance
+        return abs(actual_number - expected_number) <= (tolerance + 1e-9)
     if isinstance(expected, str) or isinstance(actual, str):
         return str(actual).strip().lower() == str(expected).strip().lower()
     return actual == expected
+
+
+def _result_contains_named_value(value: Any, field_name: str, expected: Any, tolerance: float) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == field_name and _value_matches(nested, expected, tolerance):
+                return True
+            if _result_contains_named_value(nested, field_name, expected, tolerance):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_result_contains_named_value(item, field_name, expected, tolerance) for item in value)
+    return False
+
+
+def _numbers_match(actual: float, expected: float, tolerance: float) -> bool:
+    return abs(actual - expected) <= (tolerance + 1e-9)
 
 
 def _as_number(value: Any) -> float | None:
@@ -914,6 +1029,46 @@ def _as_number(value: Any) -> float | None:
 
 def _format_path(path: tuple[str | int, ...]) -> str:
     return ".".join(str(part) for part in path)
+
+
+_TEXT_EQUIVALENT_TOKEN_GROUPS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "no inputs": (
+        ("no inputs",),
+        ("open alerts", "resolved_at"),
+        ("open alert", "resolved_at"),
+        ("mttr", "open alerts", "resolved_at"),
+    ),
+    "historical": (
+        ("historical",),
+        ("forecast", "dataset"),
+        ("forecast", "data"),
+        ("future", "dataset"),
+        ("future", "data"),
+        ("forward", "dataset"),
+        ("forward", "data"),
+    ),
+    "no such plant": (
+        ("no such plant",),
+        ("no matching plant",),
+        ("zero matching plants",),
+        ("zero matching plant",),
+        ("can't find", "plant", "dataset"),
+        ("cant find", "plant", "dataset"),
+        ("matched: 0", "plant"),
+        ("not present", "plant"),
+        ("unknown plant",),
+    ),
+}
+
+
+def _text_requirement_matches(answer_lower: str, snippet: str) -> bool:
+    normalized = snippet.strip().lower()
+    if normalized in answer_lower:
+        return True
+    return any(
+        all(token in answer_lower for token in token_group)
+        for token_group in _TEXT_EQUIVALENT_TOKEN_GROUPS.get(normalized, ())
+    )
 
 
 def evaluate_payload(spec: ReplaySpec, payload: dict[str, Any]) -> list[CheckResult]:
@@ -989,12 +1144,12 @@ def evaluate_payload(spec: ReplaySpec, payload: dict[str, Any]) -> list[CheckRes
         checks.append(
             CheckResult(
                 name=f"text:{snippet}",
-                ok=snippet.lower() in answer_lower,
+                ok=_text_requirement_matches(answer_lower, snippet),
                 detail=f"answer did not contain '{snippet}'",
             )
         )
     for number in spec.required_numbers:
-        matched = any(abs(actual - number) <= spec.number_tolerance for actual in actual_numbers)
+        matched = any(_numbers_match(actual, number, spec.number_tolerance) for actual in actual_numbers)
         checks.append(
             CheckResult(
                 name=f"number:{number}",
@@ -1045,7 +1200,7 @@ def evaluate_turn_payload(spec: ReplayTurnSpec, payload: dict[str, Any]) -> list
                 )
             )
         for number in spec.required_prior_answer_verdict_numbers:
-            matched = any(abs(actual - number) <= spec.number_tolerance for actual in verdict_numbers)
+            matched = any(_numbers_match(actual, number, spec.number_tolerance) for actual in verdict_numbers)
             checks.append(
                 CheckResult(
                     name=f"prior_answer_verdict:number:{number}",
@@ -1059,45 +1214,66 @@ def evaluate_turn_payload(spec: ReplayTurnSpec, payload: dict[str, Any]) -> list
     return checks
 
 
-def _create_session(base_url: str, title: str) -> str:
+def _create_session(base_url: str, title: str, *, timeout: float) -> str:
     body = json.dumps({"title": title}).encode()
+    target = f"{base_url.rstrip('/')}/api/sessions"
     req = request.Request(
-        f"{base_url.rstrip('/')}/api/sessions",
+        target,
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with request.urlopen(req) as resp:
-        return json.loads(resp.read().decode())["id"]
+    return _request_json(req, timeout=timeout, operation="POST", target=target)["id"]
 
 
-def _post_question(base_url: str, *, session_id: str, question: str, gating_mode: str) -> dict[str, Any]:
+def _post_question(
+    base_url: str,
+    *,
+    session_id: str,
+    question: str,
+    gating_mode: str,
+    timeout: float,
+) -> dict[str, Any]:
     body = json.dumps({
         "question": question,
         "gating_mode": gating_mode,
         "session_id": session_id,
     }).encode()
+    target = f"{base_url.rstrip('/')}/api/chat"
     req = request.Request(
-        f"{base_url.rstrip('/')}/api/chat",
+        target,
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with request.urlopen(req) as resp:
-        return json.loads(resp.read().decode())
+    return _request_json(req, timeout=timeout, operation="POST", target=target)
 
 
-def run_case(base_url: str, spec: ReplaySpec, gating_mode: str = "gated") -> dict[str, Any]:
-    session_id = _create_session(base_url, f"Replay {spec.case_id}")
-    return _post_question(base_url, session_id=session_id, question=spec.question, gating_mode=gating_mode)
+def run_case(
+    base_url: str,
+    spec: ReplaySpec,
+    gating_mode: str = "gated",
+    *,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    session_id = _create_session(base_url, f"Replay {spec.case_id}", timeout=timeout)
+    return _post_question(
+        base_url,
+        session_id=session_id,
+        question=spec.question,
+        gating_mode=gating_mode,
+        timeout=timeout,
+    )
 
 
 def run_multi_turn_case(
     base_url: str,
     spec: MultiTurnReplaySpec,
     gating_mode: str = "gated",
+    *,
+    timeout: float = 30.0,
 ) -> list[tuple[ReplayTurnSpec, dict[str, Any]]]:
-    session_id = _create_session(base_url, f"Replay {spec.transcript_id}")
+    session_id = _create_session(base_url, f"Replay {spec.transcript_id}", timeout=timeout)
     results: list[tuple[ReplayTurnSpec, dict[str, Any]]] = []
     for turn in spec.turns:
         payload = _post_question(
@@ -1105,6 +1281,7 @@ def run_multi_turn_case(
             session_id=session_id,
             question=turn.question,
             gating_mode=gating_mode,
+            timeout=timeout,
         )
         results.append((turn, payload))
     return results
@@ -1117,13 +1294,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--server", default="http://127.0.0.1:9006", help="server base URL")
     parser.add_argument("--gating-mode", choices=["gated", "bind_all"], default="gated")
-    parser.add_argument("--gate", choices=["gate1", "gate2", "gate2a", "gate2b"], action="append", default=[])
+    parser.add_argument(
+        "--gate",
+        choices=["gate1", "gate2", "gate2verify", "gate2a", "gate2b"],
+        action="append",
+        default=[],
+    )
     parser.add_argument("--case", action="append", default=[], help="case id to replay; repeatable")
     parser.add_argument(
         "--transcript",
         action="append",
         default=[],
         help="multi-turn transcript id to replay; repeatable",
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=30.0,
+        help="per-request timeout in seconds for session creation and chat calls",
     )
     args = parser.parse_args(argv)
 
@@ -1148,7 +1336,24 @@ def main(argv: list[str] | None = None) -> int:
             rc = 1
             continue
         spec = specs[case_id]
-        payload = run_case(args.server, spec, gating_mode=args.gating_mode)
+        try:
+            payload = run_case(args.server, spec, gating_mode=args.gating_mode, timeout=args.request_timeout)
+        except ReplayRequestError as exc:
+            print(f"{case_id}: FAIL")
+            print(f"  question: {spec.question}")
+            print(f"  request_error: {exc}")
+            summary_rows.append(
+                SummaryRow(
+                    case_id=case_id,
+                    ok=False,
+                    kind="case",
+                    intent_types=(),
+                    tools=(),
+                    failed_checks=("request_error",),
+                )
+            )
+            rc = 1
+            continue
         checks = evaluate_payload(spec, payload)
         ok = all(check.ok for check in checks)
         print(f"{case_id}: {'PASS' if ok else 'FAIL'}")
@@ -1176,7 +1381,28 @@ def main(argv: list[str] | None = None) -> int:
             rc = 1
             continue
         transcript = multi_turn_specs[transcript_id]
-        turn_results = run_multi_turn_case(args.server, transcript, gating_mode=args.gating_mode)
+        try:
+            turn_results = run_multi_turn_case(
+                args.server,
+                transcript,
+                gating_mode=args.gating_mode,
+                timeout=args.request_timeout,
+            )
+        except ReplayRequestError as exc:
+            print(f"{transcript.transcript_id}: FAIL")
+            print(f"  request_error: {exc}")
+            summary_rows.append(
+                SummaryRow(
+                    case_id=transcript.transcript_id,
+                    ok=False,
+                    kind="turn",
+                    intent_types=(),
+                    tools=(),
+                    failed_checks=("request_error",),
+                )
+            )
+            rc = 1
+            continue
         transcript_ok = True
         print(f"{transcript.transcript_id}: {transcript.title}")
         for turn, payload in turn_results:

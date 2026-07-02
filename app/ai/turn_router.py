@@ -32,6 +32,14 @@ _FOLLOW_UP_PREFIXES = (
     "and what about ",
     "what else ",
 )
+_AFFIRMATIVE_FOLLOW_UPS = {
+    "yes",
+    "yes please",
+    "please",
+    "ok",
+    "okay",
+    "sure",
+}
 _AMBIGUOUS_PLANT_QUESTIONS = {
     "how is the plant doing?",
     "how is the plant doing",
@@ -152,14 +160,28 @@ def build_tool_free_reply(turn_kind: TurnKind, *, fast_path: str) -> str:
     return "Please clarify the plant, inverter, metric, or time range you want me to check."
 
 
+_BARE_REFERENCE_PATTERN = re.compile(
+    r"\b(it|its|it[’'`]s|that one|this one|that plant|this plant|the plant from)\b"
+)
+
+
 def _looks_like_follow_up(clean: str, *, prompt_history: list[dict[str, str]] | None = None) -> bool:
+    has_history = bool(prompt_history)
+    if clean in _AFFIRMATIVE_FOLLOW_UPS and has_history:
+        return True
     if clean in _AMBIGUOUS_PLANT_QUESTIONS and can_resolve_ambiguous_plant(prompt_history):
         return True
     if any(clean.startswith(prefix) for prefix in _FOLLOW_UP_PREFIXES):
         return True
     if re.fullmatch(r"(and|what about|how about)\b.*", clean):
         return True
-    return bool(re.search(r"\b(previous|earlier|same one|that one|those)\b", clean))
+    if has_history and re.search(r"\b(?:re-?check|closest available|use the closest|using the closest)\b", clean):
+        return True
+    if re.search(r"\b(previous|earlier|same one|that one|those)\b", clean):
+        return True
+    # Bare pronoun / possessive references ("what is its id?") are follow-ups only
+    # when a recent entity exists to resolve against; otherwise keep asking to clarify.
+    return bool(_BARE_REFERENCE_PATTERN.search(clean)) and can_resolve_ambiguous_plant(prompt_history)
 
 
 def _looks_like_dispute(clean: str) -> bool:

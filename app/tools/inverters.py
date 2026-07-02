@@ -29,20 +29,40 @@ PARAMETERS: dict[str, Any] = {
         "plant": {"type": "string", "description": "Filter by plant_id or plant name."},
         "inverter": {"type": "string", "description": "Filter by inverter_id."},
         "status": {"type": "string", "description": "Filter by inverter status (online, fault, offline)."},
+        "silent_by_generation": {
+            "type": "boolean",
+            "description": (
+                "Filter by whether the inverter has stopped reporting generation before the current "
+                "anchor. Use this for silently not reporting or offline by data."
+            ),
+        },
     },
     "additionalProperties": False,
 }
 
 
-def inverter_status(context: ToolContext, plant: str | None = None, inverter: str | None = None, status: str | None = None) -> dict[str, Any]:
+def inverter_status(
+    context: ToolContext,
+    plant: str | None = None,
+    inverter: str | None = None,
+    status: str | None = None,
+    silent_by_generation: bool | None = None,
+) -> dict[str, Any]:
     source = context.data.table("inverters")
     frame = filter_plant(source, context, plant)
     frame = filter_exact(frame, "inverter_id", inverter)
     frame = _annotate_generation_recency(frame, context)
-    frame = filter_exact(frame, "status", status)
     silent = frame[frame["is_silent_by_generation"]]
+    ignored_status_filter = None
+    if silent_by_generation is not None:
+        frame = frame[frame["is_silent_by_generation"] == silent_by_generation]
+    if silent_by_generation is True:
+        if isinstance(status, str) and status.strip().lower() not in {"", "*", "all"}:
+            ignored_status_filter = status
+    else:
+        frame = filter_exact(frame, "status", status)
     anchor = context.effective_now()
-    return {
+    result = {
         "ok": True,
         "total_inverters": int(len(source)),
         "matched": int(len(frame)),
@@ -53,6 +73,9 @@ def inverter_status(context: ToolContext, plant: str | None = None, inverter: st
         "silent_inverter_ids": silent["inverter_id"].astype(str).tolist(),
         "inverters": records(frame, _FIELDS),
     }
+    if ignored_status_filter is not None:
+        result["ignored_status_filter_for_silent_by_generation"] = ignored_status_filter
+    return result
 
 
 def _annotate_generation_recency(frame: pd.DataFrame, context: ToolContext) -> pd.DataFrame:
@@ -82,8 +105,8 @@ def register(registry: ToolRegistry) -> None:
         ToolSpec(
             name="inverters",
             description=(
-                "Look up inverters and their operating status. Use for faulted/offline/online "
-                "inverter questions or to resolve inverter ids within a plant."
+                "Look up inverters by operating status, silent-by-generation/not-reporting state, "
+                "or to resolve inverter ids within a plant."
             ),
             parameters=PARAMETERS,
             handler=inverter_status,

@@ -482,6 +482,59 @@ numbers as named constants; promote to per-provider budgets only when a second
 provider with a materially different window/price is added. Restated here so it
 is no longer carried as open.
 
+## Reconciled control-flow target (2026-07-02)
+
+Source: `docs/reviews/agent-quality-review.md` (the review-of-record; absorbs the
+now-archived runtime-review F1–F7 and the gap-analysis status matrix), decided
+under the **quality-first** rule (R1 dominates; existence/R3-efficiency verdicts
+never outrank an R1 defect). The G6 three-turn transcript is the adjudicating
+evidence: history reaches synthesis but not the routing/refusal decision, so a
+later turn degrades — a *behavioral* reset, not a context reset.
+
+The current graph (`agent_graph.py` `compile_runtime_graph`) is a strict DAG:
+`load_session_context → route_local → classify_intent →
+{tool_free | out_of_scope | run_tool_loop} → (opt) reconcile → END`, with **no
+edge back** into routing/classification. Tool gating (`_select_tool_names`) and
+the `out_of_scope` branch both sit *before* `run_tool_loop`, so the strongest
+reasoning step cannot recover from an early wrong decision. That is the root of
+the six conflicts, and quality-first resolves all six toward the review.
+
+Target flow (elaborates ADR 0004's "LangGraph owns control flow"; does **not**
+contradict it):
+
+```text
+load_session_context
+  -> local_command_or_smalltalk_fast_path        # unchanged, zero model calls
+  -> interpret_session_turn                       # NEW — all non-command turns
+       in : latest message + bounded prompt history + safe evidence summary
+       out: turn_action ∈ {answer_from_history | ask_clarification | use_tools | refuse}
+            resolved_request, intent, tool_policy, refusal_reason?
+  -> if use_tools: graph-owned ReAct loop
+       may WIDEN tool policy / retry on tool mismatch  (revisable, not a hard gate)
+  -> reconcile_or_synthesize
+  -> persist_turn
+```
+
+Resolved positions (the "prior, not gate" principle):
+
+- **Classifier + schema card stay as cheap priors**, not irreversible gates. Keep
+  the single classification call and the ADR 0003 front-loaded card — they cost
+  no quality and save iterations (a legitimate R3 win). What changes is their
+  *authority*: the loop may widen the bound tool subset mid-turn (still never
+  binding all tables) instead of failing.
+- **Refusal moves after interpretation.** `out_of_scope` is a final graph outcome
+  once session state has been considered, never a pre-loop classifier shortcut.
+- **`follow_up` stops being a privileged phrase-matched tier.** All non-command
+  turns are session-aware by default; deterministic checks remain only as a
+  safety net for genuinely ambiguous references.
+- **Stay on LangGraph, but make it own the loop.** The quality gains are
+  session-first interpretation, in-loop recovery, and inspectable decisions —
+  LangGraph delivers all three and ADR 0004 is accepted, so the fix is the
+  *acyclic wiring*, not the framework.
+
+Out of scope of this reconciliation: R2 (prompt caching, progressive schema-card
+loading) is untouched and remains the separate agent-quality track (AQ-2/AQ-4).
+
 ## Open questions
 
 None blocking. Future revisit (tracked, not committed): per-provider context

@@ -37,6 +37,10 @@ PARAMETERS: dict[str, Any] = {
         "severity": {"type": "string", "description": "Filter by anomaly severity."},
         "anomaly_type": {"type": "string", "description": "Filter by anomaly type."},
         "cause": {"type": "string", "description": "Filter by anomaly cause."},
+        "linked_to_maintenance": {
+            "type": "boolean",
+            "description": "Filter anomalies by whether maintenance_ticket_id is present.",
+        },
     },
     "additionalProperties": False,
 }
@@ -50,6 +54,7 @@ def anomalies_lookup(
     severity: str | None = None,
     anomaly_type: str | None = None,
     cause: str | None = None,
+    linked_to_maintenance: bool | None = None,
 ) -> dict[str, Any]:
     source = context.data.table("anomalies")
     frame = filter_plant(source, context, plant)
@@ -58,24 +63,28 @@ def anomalies_lookup(
     frame = filter_exact(frame, "severity", severity)
     frame = filter_exact(frame, "anomaly_type", _normalize_anomaly_type(anomaly_type))
     frame = filter_exact(frame, "cause", cause)
+    frame = _filter_linked_to_maintenance(frame, linked_to_maintenance)
     status_counts = counts(frame, "status")
     matched_inverter_ids = (
         [str(v) for v in frame["inverter_id"].dropna().tolist()]
         if "inverter_id" in frame.columns
         else []
     )
+    total_estimated_power_loss_kw = _total_estimated_power_loss_kw(frame)
     return {
         "ok": True,
         "total_anomalies": int(len(source)),
         "matched": int(len(frame)),
         "anomaly_ids": [int(value) for value in frame["anomaly_id"].tolist()] if "anomaly_id" in frame.columns else [],
         "matched_inverter_ids": matched_inverter_ids,
+        "total_estimated_power_loss_kw": total_estimated_power_loss_kw,
         "status_counts": status_counts,
         "severity_counts": counts(frame, "severity"),
         "summary": {
             "matched": int(len(frame)),
             "status_counts": status_counts,
             "matched_inverter_ids": matched_inverter_ids,
+            "total_estimated_power_loss_kw": total_estimated_power_loss_kw,
         },
         "anomalies": records(frame, _FIELDS),
     }
@@ -113,3 +122,16 @@ def _normalize_anomaly_type(anomaly_type: str | None) -> str | None:
     if "hotspot" in value:
         return "hotspot"
     return anomaly_type
+
+
+def _filter_linked_to_maintenance(frame, linked_to_maintenance: bool | None):
+    if linked_to_maintenance is None or "maintenance_ticket_id" not in frame.columns:
+        return frame
+    mask = frame["maintenance_ticket_id"].notna()
+    return frame[mask] if linked_to_maintenance else frame[~mask]
+
+
+def _total_estimated_power_loss_kw(frame) -> float:
+    if "estimated_power_loss_kw" not in frame.columns:
+        return 0.0
+    return float(frame["estimated_power_loss_kw"].dropna().sum())

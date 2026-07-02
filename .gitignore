@@ -19,6 +19,9 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+*-gint*.txt
+*-replay*.txt
+mt-*-dispute.txt
 
 # Build artifacts
 build/

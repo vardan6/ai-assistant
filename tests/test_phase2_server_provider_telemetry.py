@@ -134,7 +134,7 @@ def test_pipeline_returns_telemetry_and_trace(monkeypatch):
     def fake_resolve_provider(config, *, purpose, provider_id="", secret_resolver=None):  # noqa: ARG001
         return SimpleNamespace(model=SimpleNamespace(model_name=f"{purpose}-model"))
 
-    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, event_handler=None):  # noqa: ARG001
+    def fake_run_agent_loop(model, *, system_prompt, user_prompt, registry, context, tool_names, prompt_history=None, event_handler=None):  # noqa: ARG001
         if event_handler is not None:
             event_handler(TraceEvent(kind="tool_started", timestamp="2026-06-27T00:00:00+00:00", message="Calling tool", tool_name="plants"))
             event_handler(TraceEvent(kind="tool_finished", timestamp="2026-06-27T00:00:01+00:00", message="Tool finished", tool_name="plants", latency_ms=12, ok=True))

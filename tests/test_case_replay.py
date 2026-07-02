@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import socket
 from types import SimpleNamespace
+from urllib import error
 
 from app.ai import run_agent_loop
 from app.case_replay import (
+    GATE2_VERIFY_CASE_IDS,
     ReplaySpec,
+    ReplayRequestError,
     ReplayTurnSpec,
     RequiredToolArgs,
     RequiredToolResultField,
@@ -13,8 +17,10 @@ from app.case_replay import (
     build_replay_specs,
     evaluate_payload,
     evaluate_turn_payload,
+    gate_case_ids,
     print_summary_table,
     replay_spec_from_mapping,
+    run_case,
 )
 from app.config import load_config
 from app.data import PandasDataSource
@@ -57,6 +63,13 @@ def test_replay_specs_cover_oracle_and_graceful_degradation_cases():
         path=("status_counts", "open"),
         value=7,
     ) in specs["AN6"].required_tool_result_fields
+
+
+def test_gate2verify_selects_fix_verification_subset():
+    assert gate_case_ids("gate2verify") == GATE2_VERIFY_CASE_IDS
+    assert "AL6" in GATE2_VERIFY_CASE_IDS
+    assert "X5" in GATE2_VERIFY_CASE_IDS
+    assert "MT-D3-DISPUTE" not in GATE2_VERIFY_CASE_IDS
 
 
 def test_multi_turn_dispute_fixture_requires_structured_verdict_assertions():
@@ -181,6 +194,36 @@ def test_evaluate_payload_checks_tool_args_and_result_fields():
     assert all(check.ok for check in checks)
 
 
+def test_evaluate_payload_accepts_name_arg_when_result_proves_expected_plant_id():
+    spec = ReplaySpec(
+        case_id="demo",
+        question="demo question",
+        expected_intent_types=("B",),
+        required_tool_args=(
+            RequiredToolArgs(tool="daily_yield", args={"plant": "4135001", "window": "last_week"}),
+        ),
+    )
+    payload = {
+        "answer": "Rajasthan Solar Park (4135001) averaged 123354.2 kWh/day last week.",
+        "intent": {"types": ["B"]},
+        "tool_calls": [
+            {
+                "name": "daily_yield",
+                "args": {"plant": "Rajasthan Solar Park", "window": "last_week", "aggregate_by": "plant"},
+                "result": {
+                    "ok": True,
+                    "results": [{"plant_id": "4135001", "avg_daily_yield": 123354.2, "days": 7}],
+                },
+            }
+        ],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
 def test_evaluate_payload_reports_missing_tool_args_and_result_fields():
     spec = ReplaySpec(
         case_id="demo",
@@ -210,6 +253,165 @@ def test_evaluate_payload_reports_missing_tool_args_and_result_fields():
 
     assert "tool_args:1:anomalies" in failed
     assert "tool_result:1:anomalies:status_counts.open" in failed
+
+
+def test_evaluate_payload_accepts_numeric_value_on_tolerance_boundary():
+    spec = ReplaySpec(
+        case_id="demo",
+        question="demo question",
+        expected_intent_types=("B",),
+        required_numbers=(68649.9,),
+    )
+    payload = {
+        "answer": "Gujarat Solar Farm averaged 68649.95 kWh/day last week.",
+        "intent": {"types": ["B"]},
+        "tool_calls": [],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_evaluate_payload_accepts_semantic_mttr_open_alert_refusal():
+    spec = ReplaySpec(
+        case_id="AL6",
+        question="What is the MTTR for open alerts?",
+        expected_intent_types=("B",),
+        required_tool_result_fields=(
+            RequiredToolResultField(tool="mttr", path=("verdict",), value="no_inputs"),
+        ),
+        required_text=("no inputs", "resolved_at"),
+    )
+    payload = {
+        "answer": "MTTR for open alerts cannot be computed because open alerts do not have resolved_at timestamps yet.",
+        "intent": {"types": ["B"]},
+        "tool_calls": [{"name": "mttr", "result": {"ok": True, "verdict": "no_inputs", "results": []}}],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_evaluate_payload_checks_alert_downtime_aggregate_evidence():
+    spec = ReplaySpec(
+        case_id="AL4",
+        question="What is the total downtime caused by resolved alerts?",
+        expected_intent_types=("B",),
+        required_tool_args=(RequiredToolArgs(tool="alerts", args={"status": "resolved"}),),
+        required_tool_result_fields=(
+            RequiredToolResultField(tool="alerts", path=("total_downtime_minutes",), value=31836.0),
+            RequiredToolResultField(tool="alerts", path=("downtime_record_count",), value=25),
+        ),
+        required_numbers=(31836.0,),
+    )
+    payload = {
+        "answer": "Resolved alerts caused 31,836 minutes of downtime.",
+        "intent": {"types": ["B"], "metric": "downtime"},
+        "tool_calls": [
+            {
+                "name": "alerts",
+                "args": {"status": "resolved"},
+                "result": {
+                    "ok": True,
+                    "total_downtime_minutes": 31836.0,
+                    "downtime_record_count": 25,
+                },
+            }
+        ],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_evaluate_payload_checks_x3_structured_chain_evidence():
+    spec = ReplaySpec(
+        case_id="X3",
+        question="For the inverter in fault, what alert and anomalies does it have?",
+        expected_intent_types=("A", "C"),
+        required_tool_args=(
+            RequiredToolArgs(tool="inverters", args={"status": "fault"}),
+            RequiredToolArgs(tool="alerts", args={"inverter": "INV_4135001_10"}),
+            RequiredToolArgs(tool="anomalies", args={"inverter": "INV_4135001_10"}),
+        ),
+        required_tool_result_fields=(
+            RequiredToolResultField(tool="inverters", path=("inverters", 0, "inverter_id"), value="INV_4135001_10"),
+            RequiredToolResultField(tool="alerts", path=("alert_ids",), value=[2, 16, 27]),
+            RequiredToolResultField(tool="anomalies", path=("anomaly_ids",), value=[4, 17, 54]),
+        ),
+        required_text=("inv_4135001_10",),
+    )
+    payload = {
+        "answer": "INV_4135001_10 is the fault inverter.",
+        "intent": {"types": ["A", "C"]},
+        "tool_calls": [
+            {
+                "name": "inverters",
+                "args": {"status": "fault"},
+                "result": {"ok": True, "inverters": [{"inverter_id": "INV_4135001_10"}]},
+            },
+            {
+                "name": "alerts",
+                "args": {"inverter": "INV_4135001_10"},
+                "result": {"ok": True, "alert_ids": [2, 16, 27]},
+            },
+            {
+                "name": "anomalies",
+                "args": {"inverter": "INV_4135001_10"},
+                "result": {"ok": True, "anomaly_ids": [4, 17, 54]},
+            },
+        ],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_evaluate_payload_accepts_semantic_forecast_data_limitation_refusal():
+    spec = ReplaySpec(
+        case_id="X5",
+        question="Forecast next week's generation for Rajasthan.",
+        expected_intent_types=(),
+        required_text=("can't answer", "historical"),
+        expected_stop_reason="out_of_scope",
+    )
+    payload = {
+        "answer": "I can't answer that from this dataset because it only supports observed data, not forecasts of future generation.",
+        "intent": {"types": ["B"]},
+        "tool_calls": [],
+        "stop_reason": "out_of_scope",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
+
+
+def test_evaluate_payload_accepts_semantic_unknown_plant_response():
+    spec = ReplaySpec(
+        case_id="X7",
+        question="What's the status of plant 9999?",
+        expected_intent_types=("A",),
+        required_text=("no such plant",),
+    )
+    payload = {
+        "answer": "I can't find plant 9999 in the dataset (`matched: 0`).",
+        "intent": {"types": ["A"]},
+        "tool_calls": [{"name": "plants"}],
+        "stop_reason": "final_answer",
+    }
+
+    checks = evaluate_payload(spec, payload)
+
+    assert all(check.ok for check in checks)
 
 
 def test_evaluate_turn_payload_checks_structured_prior_answer_verdict():
@@ -271,6 +473,27 @@ def test_print_summary_table_renders_pass_fail_grid(capsys):
     assert "X4" in out
     assert "answer_numbers" in out
     assert "Totals: 1 passed, 1 failed, 2 total" in out
+
+
+def test_run_case_raises_contextual_timeout_error(monkeypatch):
+    def fake_urlopen(req, timeout):  # noqa: ARG001
+        raise error.URLError(socket.timeout("timed out"))
+
+    monkeypatch.setattr("app.case_replay.request.urlopen", fake_urlopen)
+    spec = ReplaySpec(
+        case_id="G3",
+        question="Average AC power for INV_4135001_01 last 7 days.",
+        expected_intent_types=("B",),
+    )
+
+    try:
+        run_case("http://127.0.0.1:9006", spec, timeout=12.5)
+    except ReplayRequestError as exc:
+        assert exc.operation == "POST"
+        assert exc.target.endswith("/api/sessions")
+        assert "12.5s" in exc.detail
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected ReplayRequestError")
 
 
 def test_run_agent_loop_feeds_structured_json_not_raw_rows():
