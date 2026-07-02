@@ -415,6 +415,8 @@ class Pipeline:
                 "iterations": result.iterations,
                 "synthesis_usage": result.usage,
                 "synthesis_model_name": result.model_name or model_name_from_model(synth),
+                "tool_iteration_count": result.tool_iteration_count,
+                "turn_latency_ms": result.turn_latency_ms,
                 "fast_path": agent_state.fast_path,
             }
 
@@ -476,6 +478,8 @@ class Pipeline:
                 synthesis_model=str(runtime_state.get("synthesis_model_name", "")),
                 intent_usage=runtime_state.get("intent_usage", UsageSnapshot()),
                 synthesis_usage=runtime_state.get("synthesis_usage", UsageSnapshot()),
+                tool_iteration_count=int(runtime_state.get("tool_iteration_count", 0)),
+                turn_latency_ms=float(runtime_state.get("turn_latency_ms", 0.0)),
             ),
         )
 
@@ -949,6 +953,8 @@ def _telemetry(
     intent_usage: UsageSnapshot,
     synthesis_model: str = "",
     synthesis_usage: UsageSnapshot | None = None,
+    tool_iteration_count: int = 0,
+    turn_latency_ms: float = 0.0,
 ) -> TelemetrySummary:
     return TelemetrySummary(
         started_at=started_at,
@@ -958,4 +964,6 @@ def _telemetry(
         synthesis_model=synthesis_model,
         intent_usage=intent_usage,
         synthesis_usage=synthesis_usage or UsageSnapshot(),
+        tool_iteration_count=tool_iteration_count,
+        turn_latency_ms=turn_latency_ms,
     )

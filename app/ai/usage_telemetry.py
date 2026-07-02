@@ -45,6 +45,8 @@ class TelemetrySummary:
     synthesis_model: str = ""
     intent_usage: UsageSnapshot = field(default_factory=UsageSnapshot)
     synthesis_usage: UsageSnapshot = field(default_factory=UsageSnapshot)
+    tool_iteration_count: int = 0
+    turn_latency_ms: float = 0.0
 
     @property
     def total_usage(self) -> UsageSnapshot:
@@ -60,6 +62,8 @@ class TelemetrySummary:
             "intent_usage": self.intent_usage.as_dict(),
             "synthesis_usage": self.synthesis_usage.as_dict(),
             "total_usage": self.total_usage.as_dict(),
+            "tool_iteration_count": self.tool_iteration_count,
+            "turn_latency_ms": self.turn_latency_ms,
         }
 
 

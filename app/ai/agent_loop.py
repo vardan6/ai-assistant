@@ -39,6 +39,8 @@ class AgentResult:
     usage: UsageSnapshot = field(default_factory=UsageSnapshot)
     elapsed_ms: int = 0
     model_name: str = ""
+    tool_iteration_count: int = 0
+    turn_latency_ms: float = 0.0
 
 
 def run_agent_loop(
@@ -145,6 +147,7 @@ def run_agent_loop(
             ))
 
     answer = _final_text(final_response)
+    turn_latency_ms = (time.perf_counter() - loop_started) * 1000
     return AgentResult(
         answer=answer,
         tool_calls=executed,
@@ -152,8 +155,10 @@ def run_agent_loop(
         stop_reason=stop_reason,
         trace_events=trace_events,
         usage=usage,
-        elapsed_ms=int((time.perf_counter() - loop_started) * 1000),
+        elapsed_ms=int(turn_latency_ms),
         model_name=model_name,
+        tool_iteration_count=len(executed),
+        turn_latency_ms=turn_latency_ms,
     )
 
 
