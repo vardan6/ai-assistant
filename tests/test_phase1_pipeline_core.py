@@ -255,6 +255,7 @@ def test_pipeline_replaces_empty_iteration_limit_answer(monkeypatch):
     assert [event.kind for event in result.trace_events] == [
         "intent_started",
         "intent_finished",
+        "session_turn_interpreted",
         "synthesis_started",
         "synthesis_degraded",
     ]
@@ -308,6 +309,7 @@ def test_pipeline_emits_trace_for_gated_empty_classification_fallback(monkeypatc
     assert [event.kind for event in result.trace_events] == [
         "intent_started",
         "intent_finished",
+        "session_turn_interpreted",
         "gating_fallback",
         "synthesis_started",
     ]
@@ -458,6 +460,7 @@ def test_pipeline_emits_structured_prior_answer_verdict_for_dispute_turn(monkeyp
     assert result.intent_meta["graph_nodes"] == [
         "route_local",
         "classify_intent",
+        "interpret_session_turn",
         "run_tool_loop",
         "reconcile_prior_answer",
     ]
@@ -631,6 +634,7 @@ def test_pipeline_loads_session_context_from_store_when_session_id_is_provided(m
         "route_local",
         "classify_intent",
         "resolve_follow_up",
+        "interpret_session_turn",
         "run_tool_loop",
     ]
     assert observed["user_prompt"] == "How is Rajasthan Solar Park doing?"
@@ -638,6 +642,7 @@ def test_pipeline_loads_session_context_from_store_when_session_id_is_provided(m
         "intent_started",
         "follow_up_resolved",
         "intent_finished",
+        "session_turn_interpreted",
         "synthesis_started",
     ]
 
@@ -828,6 +833,7 @@ def test_pipeline_keeps_context_for_night_pr_recheck_follow_up(monkeypatch):
         "route_local",
         "classify_intent",
         "resolve_follow_up",
+        "interpret_session_turn",
         "run_tool_loop",
     ]
     assert result.intent["types"] == ["B"]

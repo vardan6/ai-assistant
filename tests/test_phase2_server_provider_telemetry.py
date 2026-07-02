@@ -162,6 +162,7 @@ def test_pipeline_returns_telemetry_and_trace(monkeypatch):
     assert [event.kind for event in result.trace_events] == [
         "intent_started",
         "intent_finished",
+        "session_turn_interpreted",
         "synthesis_started",
         "tool_started",
         "tool_finished",

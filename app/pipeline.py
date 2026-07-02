@@ -29,6 +29,7 @@ from .ai.agent_graph import (
     apply_turn_routing,
     build_agent_graph_state,
     compile_runtime_graph,
+    derive_turn_interpretation,
     last_assistant_message,
     latest_metric_context,
     PipelineRuntimeState,
@@ -312,6 +313,21 @@ class Pipeline:
                 "fast_path": agent_state.fast_path,
             }
 
+        def interpret_session_turn_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
+            agent_state = runtime_state["agent_state"]
+            interpretation = derive_turn_interpretation(agent_state, gating_mode=normalized_gating)
+            agent_state.turn_interpretation = interpretation
+            emit(make_trace_event(
+                "session_turn_interpreted",
+                "Interpreted session turn",
+                details={
+                    "turn_action": interpretation.get("turn_action", ""),
+                    "turn_kind": agent_state.turn_kind,
+                    "tool_policy": interpretation.get("tool_policy", ""),
+                },
+            ))
+            return {"agent_state": agent_state, "turn_interpretation": interpretation}
+
         def tool_free_reply_node(runtime_state: PipelineRuntimeState) -> dict[str, Any]:
             agent_state = runtime_state["agent_state"]
             answer = (
@@ -443,6 +459,7 @@ class Pipeline:
             load_session_context_node=graph_node("load_session_context", "Loading session context", load_session_context_node),
             route_local_node=graph_node("route_local", "Routing local fast-paths", route_local_node),
             classify_intent_node=graph_node("classify_intent", "Classifying intent and turn kind", classify_intent_node),
+            interpret_session_turn_node=graph_node("interpret_session_turn", "Interpreting session turn", interpret_session_turn_node),
             tool_free_reply_node=graph_node("tool_free_reply", "Producing tool-free reply", tool_free_reply_node),
             out_of_scope_reply_node=graph_node("out_of_scope_reply", "Producing out-of-scope reply", out_of_scope_reply_node),
             run_tool_loop_node=graph_node("run_tool_loop", "Running synthesis tool loop", run_tool_loop_node),

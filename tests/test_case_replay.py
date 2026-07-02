@@ -581,6 +581,7 @@ def test_pipeline_exposes_stage_separated_trace_and_bound_tools(monkeypatch):
     assert [event.kind for event in result.trace_events] == [
         "intent_started",
         "intent_finished",
+        "session_turn_interpreted",
         "synthesis_started",
         "model_invoke_started",
         "model_final_answer",

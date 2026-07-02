@@ -19,11 +19,13 @@ TurnKind = Literal[
 ]
 
 PriorAnswerVerdictStatus = Literal["correct", "wrong", "incomplete"]
+TurnAction = Literal["use_tools", "tool_free", "refuse"]
 GraphNodeName = Literal[
     "load_session_context",
     "route_local",
     "classify_intent",
     "resolve_follow_up",
+    "interpret_session_turn",
     "tool_free_reply",
     "out_of_scope_reply",
     "run_tool_loop",
@@ -86,6 +88,13 @@ class PriorAnswerVerdict(TypedDict, total=False):
     evidence_fingerprint_sha256: str
 
 
+class TurnInterpretation(TypedDict, total=False):
+    turn_action: TurnAction
+    resolved_request: str
+    intent: dict[str, Any]
+    tool_policy: str
+
+
 class AgentContext(TypedDict):
     session_id: str
     latest_user_message: str
@@ -105,6 +114,7 @@ class AgentGraphState:
     resolved_question: str = ""
     prior_answer_verdict: PriorAnswerVerdict | None = None
     graph_nodes: list[GraphNodeName] = field(default_factory=list)
+    turn_interpretation: TurnInterpretation = field(default_factory=dict)
 
 
 class PipelineRuntimeState(TypedDict, total=False):
@@ -114,6 +124,7 @@ class PipelineRuntimeState(TypedDict, total=False):
     agent_state: AgentGraphState
     intent: dict[str, Any]
     intent_meta: dict[str, Any]
+    turn_interpretation: TurnInterpretation
     answer: str
     stop_reason: str
     prior_answer_verdict: PriorAnswerVerdict | None
@@ -333,6 +344,29 @@ def apply_prior_answer_verdict(
     return state
 
 
+def derive_turn_interpretation(state: AgentGraphState, *, gating_mode: str = "gated") -> TurnInterpretation:
+    """Derive the typed turn-interpretation payload from already-classified state.
+
+    AR-1 structural insertion: populates from classify_intent/route_local outputs already
+    in state without any new LLM call. A future slice will replace this with a
+    session-aware semantic interpreter.
+    """
+    turn_kind = state.turn_kind
+    intent = state.intent
+    if turn_kind in {"smalltalk", "command", "clarification", "prior_answer_meta"}:
+        turn_action: TurnAction = "tool_free"
+    elif turn_kind == "out_of_scope" and bool(intent.get("out_of_scope")):
+        turn_action = "refuse"
+    else:
+        turn_action = "use_tools"
+    return TurnInterpretation(
+        turn_action=turn_action,
+        resolved_request=state.resolved_question or state.latest_user_message,
+        intent=intent,
+        tool_policy=gating_mode,
+    )
+
+
 def plan_graph_nodes(
     *,
     turn_kind: TurnKind,
@@ -351,6 +385,7 @@ def plan_graph_nodes(
     nodes.append("classify_intent")
     if turn_kind == "follow_up":
         nodes.append("resolve_follow_up")
+    nodes.append("interpret_session_turn")
     if tool_free:
         nodes.append("tool_free_reply")
         return nodes
@@ -368,6 +403,7 @@ def compile_runtime_graph(
     load_session_context_node: Callable[[PipelineRuntimeState], dict[str, Any]],
     route_local_node: Callable[[PipelineRuntimeState], dict[str, Any]],
     classify_intent_node: Callable[[PipelineRuntimeState], dict[str, Any]],
+    interpret_session_turn_node: Callable[[PipelineRuntimeState], dict[str, Any]],
     tool_free_reply_node: Callable[[PipelineRuntimeState], dict[str, Any]],
     out_of_scope_reply_node: Callable[[PipelineRuntimeState], dict[str, Any]],
     run_tool_loop_node: Callable[[PipelineRuntimeState], dict[str, Any]],
@@ -377,6 +413,7 @@ def compile_runtime_graph(
     graph.add_node("load_session_context", load_session_context_node)
     graph.add_node("route_local", route_local_node)
     graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("interpret_session_turn", interpret_session_turn_node)
     graph.add_node("tool_free_reply", tool_free_reply_node)
     graph.add_node("out_of_scope_reply", out_of_scope_reply_node)
     graph.add_node("run_tool_loop", run_tool_loop_node)
@@ -392,9 +429,10 @@ def compile_runtime_graph(
             "classify_intent": "classify_intent",
         },
     )
+    graph.add_edge("classify_intent", "interpret_session_turn")
     graph.add_conditional_edges(
-        "classify_intent",
-        _route_after_classify,
+        "interpret_session_turn",
+        _route_after_interpret,
         {
             "tool_free_reply": "tool_free_reply",
             "out_of_scope_reply": "out_of_scope_reply",
@@ -422,13 +460,12 @@ def _route_after_local(state: PipelineRuntimeState) -> str:
     return "classify_intent"
 
 
-def _route_after_classify(state: PipelineRuntimeState) -> str:
-    agent_state = state.get("agent_state")
-    if not isinstance(agent_state, AgentGraphState):
-        return "run_tool_loop"
-    if agent_state.turn_kind in {"smalltalk", "command", "clarification", "prior_answer_meta"}:
+def _route_after_interpret(state: PipelineRuntimeState) -> str:
+    interpretation = state.get("turn_interpretation") or {}
+    turn_action = interpretation.get("turn_action", "use_tools")
+    if turn_action == "tool_free":
         return "tool_free_reply"
-    if agent_state.turn_kind == "out_of_scope" and bool(state.get("intent", {}).get("out_of_scope")):
+    if turn_action == "refuse":
         return "out_of_scope_reply"
     return "run_tool_loop"
 
