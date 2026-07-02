@@ -29,11 +29,36 @@ OPENAI_COMPATIBLE_PROVIDER_TYPES = {
 }
 
 _MODEL_CACHE: dict[str, Any] = {}
+_EPHEMERAL_CACHE_CONTROL = {"type": "ephemeral"}
 
 
 def evict_model_cache() -> None:
     """Clear the process-level model cache (call after provider config changes)."""
     _MODEL_CACHE.clear()
+
+
+def is_anthropic_model(model: Any) -> bool:
+    """Return True when *model* is a LangChain Anthropic chat model."""
+    model_type = type(model)
+    return model_type.__name__ == "ChatAnthropic" and model_type.__module__.startswith("langchain_anthropic")
+
+
+def system_blocks_with_cache(system_prompt: str) -> list[dict[str, Any]]:
+    """Wrap the stable system prefix in a cacheable Anthropic content block."""
+    return [{
+        "type": "text",
+        "text": system_prompt,
+        "cache_control": dict(_EPHEMERAL_CACHE_CONTROL),
+    }]
+
+
+def tool_schemas_with_cache(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark the final tool definition as a cache breakpoint for Anthropic."""
+    if not schemas:
+        return schemas
+    cached_last = dict(schemas[-1])
+    cached_last["cache_control"] = dict(_EPHEMERAL_CACHE_CONTROL)
+    return [*schemas[:-1], cached_last]
 
 
 @dataclass(slots=True)

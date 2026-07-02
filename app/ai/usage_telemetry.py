@@ -11,16 +11,29 @@ class UsageSnapshot:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     def add(self, other: "UsageSnapshot") -> "UsageSnapshot":
         return UsageSnapshot(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+            cache_creation_tokens=self.cache_creation_tokens + other.cache_creation_tokens,
         )
 
-    def as_dict(self) -> dict[str, int]:
-        return asdict(self)
+    @property
+    def cache_hit_rate(self) -> float:
+        cache_total = self.cache_read_tokens + self.cache_creation_tokens
+        if cache_total <= 0:
+            return 0.0
+        return self.cache_read_tokens / cache_total
+
+    def as_dict(self) -> dict[str, int | float]:
+        payload = asdict(self)
+        payload["cache_hit_rate"] = self.cache_hit_rate
+        return payload
 
 
 @dataclass(slots=True)
@@ -70,10 +83,15 @@ def usage_from_response(response: Any) -> UsageSnapshot:
     total_tokens = _first_int(usage, "total_tokens", "total_token_count")
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens
+    details = usage.get("input_token_details") or {}
+    cache_read_tokens = _first_int(details, "cache_read")
+    cache_creation_tokens = _cache_creation_tokens(details)
     return UsageSnapshot(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_creation_tokens=cache_creation_tokens,
     )
 
 
@@ -94,3 +112,10 @@ def _first_int(payload: dict[str, Any], *keys: str) -> int:
         except (TypeError, ValueError):
             continue
     return 0
+
+
+def _cache_creation_tokens(details: dict[str, Any]) -> int:
+    specific_total = _first_int(details, "ephemeral_5m_input_tokens") + _first_int(details, "ephemeral_1h_input_tokens")
+    if specific_total > 0:
+        return specific_total
+    return _first_int(details, "cache_creation")

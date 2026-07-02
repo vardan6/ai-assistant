@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .agent_traces import TraceEvent, make_trace_event
+from .provider_registry import is_anthropic_model, system_blocks_with_cache, tool_schemas_with_cache
 from .usage_telemetry import UsageSnapshot, model_name_from_model, usage_from_response
 from ..tools import ToolContext, ToolRegistry
 
@@ -55,9 +56,16 @@ def run_agent_loop(
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
     schemas = registry.bind_schemas(tool_names)
-    bound_model = model.bind_tools(schemas) if schemas else model
+    anthropic = is_anthropic_model(model)
+    if anthropic and schemas:
+        bound_model = model.bind_tools(tool_schemas_with_cache(schemas))
+    elif schemas:
+        bound_model = model.bind_tools(schemas)
+    else:
+        bound_model = model
 
-    messages: list[Any] = [SystemMessage(content=system_prompt)]
+    system_content: Any = system_blocks_with_cache(system_prompt) if anthropic else system_prompt
+    messages: list[Any] = [SystemMessage(content=system_content)]
     for prior in prompt_history or []:
         content = str(prior.get("content", "")).strip()
         if not content:
