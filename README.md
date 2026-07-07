@@ -194,12 +194,13 @@ and redirect both `stdout` and `stderr` into files:
 
 ```bash
 source .venv/bin/activate
-python -m pytest -q > pytest-gint1.txt 2>&1
-python -m compileall app scripts > compileall-gint1.txt 2>&1
-rg -n "</content>|</invoke>" README.md docs > docs-hygiene-gint1.txt 2>&1
-./run-case-replay.sh --gate gate1 > gate1-replay.txt 2>&1
-./run-case-replay.sh --gate gate2 > gate2-replay.txt 2>&1
-./run-case-replay.sh --transcript MT-D3-DISPUTE > mt-d3-dispute.txt 2>&1
+mkdir -p tests/output/verification tests/output/replay
+python -m pytest -q > tests/output/verification/pytest-gint1.txt 2>&1
+python -m compileall app scripts > tests/output/verification/compileall-gint1.txt 2>&1
+rg -n "</content>|</invoke>" README.md docs > tests/output/verification/docs-hygiene-gint1.txt 2>&1
+tests/scripts/run-case-replay.sh --gate gate1 > tests/output/replay/gate1-replay.txt 2>&1
+tests/scripts/run-case-replay.sh --gate gate2 > tests/output/replay/gate2-replay.txt 2>&1
+tests/scripts/run-case-replay.sh --transcript MT-D3-DISPUTE > tests/output/replay/mt-d3-dispute.txt 2>&1
 ```
 
 This sequence maps to the current gate plan:
@@ -210,7 +211,8 @@ This sequence maps to the current gate plan:
 If you want to watch the replay live and still keep a file artifact, use:
 
 ```bash
-./run-case-replay.sh --gate gate1 2>&1 | tee gate1-replay.txt
+mkdir -p tests/output/replay
+tests/scripts/run-case-replay.sh --gate gate1 2>&1 | tee tests/output/replay/gate1-replay.txt
 ```
 
 ## Case Replay Gates
@@ -225,8 +227,8 @@ The replay harness has two behavioural gates:
 Use the shell wrapper:
 
 ```bash
-./run-case-replay.sh --gate gate1
-./run-case-replay.sh --gate gate2
+tests/scripts/run-case-replay.sh --gate gate1
+tests/scripts/run-case-replay.sh --gate gate2
 ```
 
 The wrapper covers server startup for you:
@@ -237,8 +239,8 @@ The wrapper covers server startup for you:
 So the normal operator path is just:
 
 ```bash
-./run-case-replay.sh --gate gate1
-./run-case-replay.sh --gate gate2
+tests/scripts/run-case-replay.sh --gate gate1
+tests/scripts/run-case-replay.sh --gate gate2
 ```
 
 You do not need to start `./run-web-server.sh` first unless you specifically
@@ -246,7 +248,7 @@ want the server running separately.
 
 ### What The Command Runs
 
-`./run-case-replay.sh` forwards to:
+`tests/scripts/run-case-replay.sh` forwards to:
 
 ```bash
 .venv/bin/python -m app.case_replay --server http://127.0.0.1:9006 ...
@@ -266,11 +268,11 @@ The replay CLI supports:
 Examples:
 
 ```bash
-./run-case-replay.sh --gate gate1
-./run-case-replay.sh --gate gate2 --gating-mode bind_all
-./run-case-replay.sh --gate gate2verify --request-timeout 45
-./run-case-replay.sh --case D3 --case X4
-./run-case-replay.sh --transcript MT-D3-DISPUTE
+tests/scripts/run-case-replay.sh --gate gate1
+tests/scripts/run-case-replay.sh --gate gate2 --gating-mode bind_all
+tests/scripts/run-case-replay.sh --gate gate2verify --request-timeout 45
+tests/scripts/run-case-replay.sh --case D3 --case X4
+tests/scripts/run-case-replay.sh --transcript MT-D3-DISPUTE
 ```
 
 The wrapper also honors:
@@ -326,15 +328,17 @@ shell scripting and CI.
 If you want a file artifact, redirect or tee the output:
 
 ```bash
-./run-case-replay.sh --gate gate1 | tee gate1-replay.txt
-./run-case-replay.sh --gate gate2 | tee gate2-replay.txt
+mkdir -p tests/output/replay
+tests/scripts/run-case-replay.sh --gate gate1 | tee tests/output/replay/gate1-replay.txt
+tests/scripts/run-case-replay.sh --gate gate2 | tee tests/output/replay/gate2-replay.txt
 ```
 
 Or keep stderr and stdout together:
 
 ```bash
-./run-case-replay.sh --gate gate1 > gate1-replay.txt 2>&1
-./run-case-replay.sh --gate gate2 > gate2-replay.txt 2>&1
+mkdir -p tests/output/replay
+tests/scripts/run-case-replay.sh --gate gate1 > tests/output/replay/gate1-replay.txt 2>&1
+tests/scripts/run-case-replay.sh --gate gate2 > tests/output/replay/gate2-replay.txt 2>&1
 ```
 
 This is useful when you want a human or an AI agent to review the exact replay
@@ -353,9 +357,10 @@ Recommended order:
 Example:
 
 ```bash
-./run-case-replay.sh --gate gate1 > gate1-replay.txt 2>&1
-./run-case-replay.sh --gate gate2 > gate2-replay.txt 2>&1
-./run-case-replay.sh --transcript MT-D3-DISPUTE > mt-d3-dispute.txt 2>&1
+mkdir -p tests/output/replay
+tests/scripts/run-case-replay.sh --gate gate1 > tests/output/replay/gate1-replay.txt 2>&1
+tests/scripts/run-case-replay.sh --gate gate2 > tests/output/replay/gate2-replay.txt 2>&1
+tests/scripts/run-case-replay.sh --transcript MT-D3-DISPUTE > tests/output/replay/mt-d3-dispute.txt 2>&1
 ```
 
 After that:

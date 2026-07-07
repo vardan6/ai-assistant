@@ -761,3 +761,23 @@ def test_server_config_io_round_trip_and_validation(tmp_path):
 
     rejected = client.put("/api/settings/config", json={"config": {"appearance": "bad"}})
     assert rejected.status_code == 400
+
+
+def test_usage_snapshot_roundtrips_through_as_dict() -> None:
+    """as_dict() emits a derived cache_hit_rate; from_dict() must ignore it.
+
+    Regression: pipeline rebuilt the intent usage via UsageSnapshot(**usage),
+    which crashed once as_dict() started carrying the derived cache_hit_rate key.
+    """
+    snapshot = UsageSnapshot(
+        input_tokens=10,
+        output_tokens=5,
+        total_tokens=15,
+        cache_read_tokens=8,
+        cache_creation_tokens=2,
+    )
+    payload = snapshot.as_dict()
+    assert "cache_hit_rate" in payload
+
+    assert UsageSnapshot.from_dict(payload) == snapshot
+    assert UsageSnapshot.from_dict({}) == UsageSnapshot()

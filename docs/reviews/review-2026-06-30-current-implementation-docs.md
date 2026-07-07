@@ -296,8 +296,8 @@ Recommendation:
 ## Recommended immediate action
 
 1. Fix Web UI gating so the default and persisted chat path are `gated`.
-2. Fix D5 deterministically and rerun `./run-case-replay.sh --case D5`, then
-   `./run-case-replay.sh --gate gate1`.
+2. Fix D5 deterministically and rerun `tests/scripts/run-case-replay.sh --case D5`, then
+   `tests/scripts/run-case-replay.sh --gate gate1`.
 3. Normalize prior-answer recall stop reason before gate2b.
 4. Resolve the D3 dispute expected verdict before treating multi-turn replay as
    authoritative.

@@ -35,6 +35,12 @@ class UsageSnapshot:
         payload["cache_hit_rate"] = self.cache_hit_rate
         return payload
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "UsageSnapshot":
+        """Rebuild from an ``as_dict`` payload, ignoring derived/unknown keys."""
+        fields = {f for f in cls.__slots__}
+        return cls(**{k: v for k, v in payload.items() if k in fields})
+
 
 @dataclass(slots=True)
 class TelemetrySummary:

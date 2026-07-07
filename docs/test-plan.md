@@ -11,7 +11,7 @@
 > **full per-surface case catalog** (plants…anomalies + cross-cutting), exceeding
 > the spec's A/B/C examples. The former **[oracle⁺]** placeholders are now pinned
 > in `docs/golden-answers.md`; the replay harness and rubric checks live in
-> `app/case_replay.py` + `scripts/cli_case_replay.py`. **Execution order:** run
+> `app/case_replay.py` + `tests/scripts/cli_case_replay.py`. **Execution order:** run
 > the initial-task **15-question gate** first (`D1–D6`, `A1–A3`, `B1–B3`,
 > `C1–C3`); then run **Gate 2** — the remaining 36 single-turn behavioural cases
 > from the 51-case canonical catalog plus the 4 multi-turn transcript fixtures —
@@ -365,7 +365,7 @@ not a graded surface.
 - Oracle values are pinned in `docs/golden-answers.md` via
   `scripts/golden_answers.py`, including the former `[oracle⁺]` rows.
 - The replay harness lives in `app/case_replay.py` with the thin CLI entrypoint
-  `scripts/cli_case_replay.py`; it checks intent, tool chain, and answer facts
+  `tests/scripts/cli_case_replay.py`; it checks intent, tool chain, and answer facts
   against the oracle-backed expectations. Each case run creates a dedicated chat
   session titled `"Replay {case_id}"` (e.g. `"Replay D2"`) so runs are traceable
   in the session store by test-plan ID.
@@ -381,21 +381,21 @@ not a graded surface.
 
 **Execution order (authoritative):**
 
-1. **Gate 1 — initial-task 15-question set.** Run the questions taken directly
+   1. **Gate 1 — initial-task 15-question set.** Run the questions taken directly
    from `docs/solar_interview_task.md`: `D1–D6`, `A1–A3`, `B1–B3`, `C1–C3`.
    ```
-   ./run-case-replay.sh --gate gate1
+   tests/scripts/run-case-replay.sh --gate gate1
    ```
 2. **Gate 2 — remaining canonical behavioural coverage + multi-turn transcripts.**
    After Gate 1 passes, run `gate2a` and `gate2b` in parallel — two terminals,
    one server. `gate2b` includes the 4 multi-turn transcript fixtures.
    ```
    # terminal A
-   ./run-case-replay.sh --gate gate2a
+   tests/scripts/run-case-replay.sh --gate gate2a
    # terminal B (simultaneously)
-   ./run-case-replay.sh --gate gate2b
+   tests/scripts/run-case-replay.sh --gate gate2b
    ```
-   Or run everything sequentially: `./run-case-replay.sh --gate gate2`
+   Or run everything sequentially: `tests/scripts/run-case-replay.sh --gate gate2`
 3. **Structural probes.** Run the 5 requirement probes in §3.10.
 
 **Gate 1 alias map into the 51-case canonical catalog** (same meaning, different

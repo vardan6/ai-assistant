@@ -2,7 +2,7 @@
 
 ## Scope
 
-Fresh artifact reviewed: `gate2-replay-current.txt`.
+Fresh artifact reviewed: `tests/output/replay/gate2-replay-current.txt`.
 
 Fresh result after dependency repair and the P5 inverter-count fix:
 

@@ -1,6 +1,6 @@
 # ADR 0005 — Progressive schema-card loading
 
-**Status:** proposed · 2026-07-02
+**Status:** accepted · 2026-07-03
 **Revisits:** ADR 0003 (static schema card injected whole into the system prompt).
 
 ## Context
@@ -61,7 +61,10 @@ the card is just smaller. Cache boundary moves to post-intent (per-turn dynamic)
 
 ## Decision
 
-**[TBD — HITL]**
+Adopt **option (a)** and keep ADR 0003's static schema-card approach.
+
+The system will continue to inject the full schema card on every turn. We are
+not implementing progressive schema-card loading as part of AQ-4.
 
 | | (a) Full card, static | (b) Summary + drill-down | (c) Per-tool fragments |
 |---|---|---|---|
@@ -91,8 +94,22 @@ means cache invalidation on every new turn's tool-set — a significant loss of
 caching value. If AQ-2 lands first with a static prefix, option (c) would
 require AQ-2 to be reworked.
 
-**Rejection rationale (pre-decision):** The full-card size is modest. The token
-cost of the card on a typical turn is small relative to the model's response and
-history overhead; absolute savings from options (b)/(c) may not justify the R1
-risk or the AQ-2 coordination cost. A measurement of actual card token weight
-against total prompt tokens per turn would sharpen this decision.
+## Rationale
+
+The full-card size is modest, while the downside of dynamic card loading is
+concrete:
+
+- It weakens AQ-2's stable cached prefix and would reduce prompt-cache value.
+- It adds either answer-quality risk ((c) fragment omission) or extra loop cost
+  ((b) drill-down).
+- It adds implementation complexity without a proportionate R2 win at the
+  current card size.
+
+Given the existing integrated implementation, option (a) is the only choice
+that preserves the current R1/R3 behavior and avoids reworking AQ-2.
+
+## Follow-up
+
+AQ-4 is closed by decision rather than implementation. If schema-card size
+changes materially in the future, revisit this ADR with measured token data
+before re-opening progressive loading.

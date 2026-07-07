@@ -280,7 +280,7 @@ class Pipeline:
                     prompt_history=agent_state.prompt_history,
                 )
             agent_state = apply_turn_routing(agent_state, intent=intent, turn_kind=turn_kind, fast_path=fast_path)
-            intent_usage = UsageSnapshot(**intent_env.get("usage", {}))
+            intent_usage = UsageSnapshot.from_dict(intent_env.get("usage", {}))
             intent_meta = {
                 "provider_name": intent_env.get("provider_name", ""),
                 "latency_ms": intent_env.get("latency_ms", 0),
