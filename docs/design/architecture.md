@@ -16,15 +16,22 @@ proven modules, write a fresh tool layer, drop all rover/mission/MAVLink code.
 |---|---|
 | `ai/intent_service.py` | LLM→JSON intent classifier + regex fast-path + JSON-repair retry |
 | `ai/smalltalk_patterns.py` | Greeting/smalltalk fast-path (skip LLM+tools); extend patterns |
-| `ai/agent_loop.py` | Iterative tool-calling loop, result caching, traces, failure detection |
+| `ai/agent_loop.py` | Iterative tool-calling loop, traces, failure detection. **Result caching was not carried over** — see the note below the table. |
 | `ai/provider_registry.py` | Multi-provider chat-model builder + caching + secret resolver |
 | `ai/secret_store.py` | SQLite secret store keyed by `secret_ref` (raw keys never in config) |
 | `provider_normalizers.py`, `routers/llm.py` | Provider CRUD/normalization, secret redaction |
 | `config.py` pattern | JSON config deep-merge (`common.local.json` over `common.example.json`) |
-| `ai/agent_traces.py`, `ai/usage_telemetry.py`, `ai/tool_result_cache.py` | Streaming traces + token/timing telemetry + tool-result cache |
+| `ai/agent_traces.py`, `ai/usage_telemetry.py` | Streaming traces + token/timing telemetry |
+| ~~`ai/tool_result_cache.py`~~ | **Not carried over.** Planned here, never implemented. |
 | `ai/session_store.py` | SQLite session store for sidebar + CLI session resume (trimmed) |
 | `tools/gcs_ai_cli.py` | Thin HTTP-client CLI (token/timing footer); adapt |
 | Web theme tokens (colors/spacing/styling) | Adopt for the fresh Web UI |
+
+> **Carry-over status corrected 2026-07-27.** This table is the *plan* of what to
+> reuse, and one row had drifted into reading as an assertion of what exists.
+> `ai/tool_result_cache.py` does not exist in `app/ai/`, and `agent_loop.py` does
+> no result caching. Whether to build it is open — `roadmap.md` "Deferred" N6
+> (attribute G4). Nothing else in the table has drifted.
 
 ### Dropped
 
