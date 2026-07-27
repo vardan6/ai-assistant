@@ -47,7 +47,10 @@ loop — it is in the quality of the tools, the discipline of what enters the
 context window, the ability to recover when a step fails, and the existence of a
 measurement rig that tells you whether a change helped. Teams consistently
 over-invest in orchestration frameworks and under-invest in evaluation and tool
-design, which is the inverse of what determines outcomes.
+design, which is the inverse of what determines outcomes. The one published
+source-level teardown of a production coding agent reaches the same conclusion
+structurally: the core is a simple while-loop, and most of the code is the
+systems around it `[EB §8.1]`.
 
 The central design principle:
 
@@ -448,6 +451,11 @@ The order of preference is the reverse of most implementations' instincts.
    lossy by nature — preserve the original event log and artifacts outside the
    model so omitted detail is recoverable.
 
+This escalation ladder is not theoretical: a shipped implementation stages five
+layers in exactly this cheapest-first order, from pointer substitution through
+history trimming to full auto-compaction, with **cache-awareness built into the
+compression layer** rather than bolted on `[EB §8.1]`.
+
 Compaction must **preserve**: goal and constraints, user commitments, decisions
 and rationale, current plan and progress, unresolved failures, artifact
 identifiers, external side effects, evidence required for later verification.
@@ -477,6 +485,12 @@ negative constraints, permissions, and temporal questions. For code specifically
 an LLM driving lexical search in a loop beats a frozen embedding index on a
 repository that changes every commit — and results should be verified against
 disk `[EB §4]`.
+
+Shipping products split on this: one reference implementation defaults to live
+agentic search with no index, another to an automatic incremental cloud index
+with Merkle-tree change detection `[EB §4.1]`. If you build an index, reject or
+accept it on **staleness and privacy** grounds — embedding cost is negligible
+against the loop's own model calls.
 
 ### §3.6 Just-in-time retrieval, and its honest tension with caching
 

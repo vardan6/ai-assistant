@@ -1,4 +1,29 @@
-# Complete Session Record: AI Agents, ReAct Loops, Claude Code Architecture, LLM Statelessness, Context Management & RAG in Coding Agents
+# Session record — ReAct, Claude Code architecture, LLM statelessness, context management, RAG
+
+> **Archived:** 2026-07-27. Superseded raw input, retained for provenance only.
+> **Origin:** reconstruction of a chat session; authoring model, reasoning
+> effort, and date were not recorded and could not be recovered.
+>
+> **Status:** NOT part of the research set. This document carries no citations
+> and several claims are self-hedged. Do not cite it. The four documents in
+> `docs/research/ai-agent-*` are canonical; every quantitative claim belongs in
+> `ai-agent-evidence-base-opus-5-2026-07-26.md`.
+>
+> **Harvested on archival:**
+> - §2 Claude Code architecture → verified against the primary source
+>   ([arXiv 2604.14228](https://arxiv.org/abs/2604.14228)) and merged into
+>   **EB §8.1**, which also flags the 1.6%/98.4% figure below as secondary
+>   commentary rather than a paper finding.
+> - §4 five-layer compaction → concrete layer names recovered and merged into
+>   **EB §8.1**; cross-referenced from RA §3.4.
+> - §5 vendor RAG → merged into **EB §4.1**, with first-party vs. secondary
+>   claims separated; cross-referenced from RA §3.5.
+>
+> **Deliberately not carried over:** §1 (ReAct overview — covered at higher
+> rigor by EB §6.6 and §7), §3 (statelessness — reframed more precisely as
+> RA §3.1 "context as projection" and §3.3 "seven kinds of state"), §6
+> (end-user guidance — out of scope; the set is for building agents, not using
+> them), §7 (synthesis — EB §1, RA §0).
 
 This document is a comprehensive, restructured, and expanded reconstruction of the full conversation session. It consolidates every major topic discussed, corrects and merges related points, and presents them as a coherent technical reference.
 

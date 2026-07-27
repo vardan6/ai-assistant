@@ -40,6 +40,7 @@ expect to reproduce. §11 lists where the evidence is genuinely thin.
 | `ai-agent-dynamic-context-loop-platform-perspectives-gpt-5-6-2026-07-25.md` | GPT-5.6 | low | §2.8, §7.10, framework sources |
 | `ai-agent-hierarchical-decomposition-isolated-reasoning-gpt-5-6-2026-07-25.md` | GPT-5.6 | low | §7.2, §7.4, foundational papers |
 | `ai-agent-implementation-attributes-opus-5-2026-07-25.md` | Claude Opus 5 | medium | None — carried no citations by design |
+| `ai-agent-session-record-unattributed-2026-07-25.md` | Unrecorded | Unrecorded | §4.1, §8.1 — merged 2026-07-27; leads only, all claims re-verified against primary sources |
 
 ---
 
@@ -354,6 +355,42 @@ disk**.
 
 Embeddings alone are insufficient for exact code symbols, recent state, negative
 constraints, permissions, and temporal questions.
+
+### §4.1 What shipping products actually do
+
+The two reference implementations sit at opposite ends, which is the useful part
+— both ship, at scale, with incompatible answers.
+
+| | Claude Code | Cursor |
+|---|---|---|
+| Default | Agentic live search — glob, grep/ripgrep, read, optional LSP | Pre-built semantic index over the workspace |
+| Index | None by default; vector retrieval only via optional MCP plugins | Automatic on workspace open, background, incremental |
+| Freshness | Always current — searches run against disk | Re-indexed on change; staleness window is real but bounded |
+| Persistence | Local `.claude/` + `CLAUDE.md` for project orientation | Cloud vector store |
+
+**Cursor's staleness answer is a Merkle tree.** First-party documentation
+describes client-side edits changing only the hashes of the edited file and its
+parent directories to the root, so re-indexing walks only divergent branches; the
+server filters results against the client's tree, so *"the client can never see
+results for code it doesn't already have."*
+[Cursor — Securely indexing large codebases](https://cursor.com/blog/secure-codebase-indexing)
+
+> **Verified vs. reported.** The Merkle-tree change detection and hash-based
+> server-side filtering above are first-party. Commonly repeated details that the
+> first-party post does **not** state — Turbopuffer as the vector store,
+> tree-sitter syntax-aware chunking, obfuscated paths and line ranges as stored
+> metadata, raw source never persisted, a ~10-minute re-index cadence — come from
+> [secondary](https://towardsdatascience.com/how-cursor-actually-indexes-your-codebase/)
+> [analyses](https://read.engineerscodex.com/p/how-cursor-indexes-codebases-fast)
+> and are plausible but unconfirmed. Treat vendor internals as a moving target.
+
+Two consequences for a build decision. **Embedding cost is not the constraint** —
+embedding models are orders of magnitude cheaper than the reasoning models
+driving the loop, and indexing cost is dominated by the many LLM calls per task
+(§3.4); reject an index on staleness or privacy grounds, not on cost. And
+**cloud indexing is a privacy decision, not a performance one** — a fully local
+embedding + vector-store pipeline is available and the tradeoff is latency and
+index quality, which matters when the codebase is proprietary.
 
 ---
 
@@ -737,7 +774,57 @@ routing and evaluator calls.
 
 ---
 
-## §8 Platform feature surface — context cost per extension point
+## §8 Platform feature surface
+
+### §8.1 The Claude Code source teardown — the harness-first measurement
+
+The only peer-reviewed structural analysis of a production coding agent. Liu,
+Zhao, Shang & Shen analyzed Claude Code's publicly available TypeScript source
+and compared it against two independent open-source agents, **OpenClaw** and
+**Hermes Agent**, chosen because they answer the same design questions in
+different deployment contexts.
+[Dive into Claude Code (2604.14228)](https://arxiv.org/abs/2604.14228)
+(v1 2026-04-14, v2 2026-07-02)
+
+**The structural claim**, stated in the abstract: the core is *"a simple
+while-loop that calls the model, runs tools, and repeats. Most of the code,
+however, lives in the systems around this loop."* Documented subsystems:
+
+| Subsystem | As reported |
+|---|---|
+| Permission system | **Seven modes** plus an ML-based classifier, evaluated deny-first |
+| Compaction | **Five-layer** pipeline (see below) |
+| Extensibility | **Four mechanisms** — MCP, plugins, skills, hooks |
+| Delegation | Subagent orchestration |
+| Persistence | Append-oriented session storage |
+
+The architecture is traced from **five human values** — human decision authority;
+safety, security, and privacy; reliable execution; capability amplification;
+contextual adaptability — through **thirteen design principles** to concrete
+implementation choices.
+
+**The five compaction layers**, in escalation order: budget reduction (replace
+oversized raw tool output with reference pointers) → *Snip* (trim older,
+less-relevant history) → *Microcompact* (fine-grained, **cache-aware**
+compression) → context collapse → auto-compact. This is the progressive
+cheapest-first discipline of §2.4 as a shipped implementation, and the
+cache-awareness at layer three is the §3.2 constraint made structural.
+
+> **Attribution caution.** The widely circulated figure that **only 1.6% of the
+> codebase is AI decision logic and 98.4% is operational infrastructure** comes
+> from [secondary commentary](https://arxiviq.substack.com/p/dive-into-claude-code-the-design),
+> **not** from the paper's abstract. It is directionally consistent with the
+> paper's own structural claim, but the ratio itself is unverified against the
+> primary text and should not be quoted as a paper finding without checking.
+
+Two limits on transfer. The analysis is **one system at one version**, and the
+paper's own comparison against OpenClaw and Hermes Agent is the point: *the same
+design questions produce different answers across deployment contexts.* Read the
+subsystem list as an existence proof of what a mature harness contains, not as a
+specification. §1 applies here as everywhere — harness effects do not transfer
+unexamined.
+
+### §8.2 Context cost per extension point
 
 The second column is the part usually missed. Figures as documented by Anthropic
 for Claude Code; treat as the reference implementation, not a universal.
@@ -819,6 +906,10 @@ prompts**. Its current guidance emphasizes **containment** — limiting what an
 agent is capable of doing — even when behavioral defenses fail.
 [Anthropic — How we contain Claude](https://www.anthropic.com/engineering/how-we-contain-claude)
 
+The structural response to that number is graded authority rather than a single
+prompt: seven permission modes plus an ML classifier, evaluated deny-first
+`[§8.1]`.
+
 MCP-specific security requirements (token audience validation, no token
 passthrough, per-client consent, least-privilege scopes, confused-deputy and SSRF
 defenses, treating server tool descriptions and returned content as untrusted):
@@ -856,6 +947,12 @@ Read this before treating anything above as settled.
 6. **Back-revision is not standard.** Blackboards support it; mainstream agent
    frameworks default to forward-only pipelines.
 7. **The strongest decomposition evidence explicitly excludes coding** (§7.6).
+8. **The source-level teardown is one system at one version** (§8.1). It
+   establishes what a mature harness *contains*, not that any subsystem is
+   load-bearing — no ablation accompanies it. The paper's own comparison against
+   two independent agents is the caveat: the same design questions get different
+   answers per deployment context. Vendor internals also move faster than the
+   analyses describing them (§4.1).
 
 ---
 
@@ -940,7 +1037,13 @@ Each is a failure mode named in a source above, not a stylistic preference.
 [NVIDIA NeMo — ReWOO agent](https://docs.nvidia.com/nemo/agent-toolkit/1.2/workflows/about/rewoo-agent.html) ·
 [MCP — Security best practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)
 
+**Vendor engineering — retrieval and indexing**
+[Cursor — Securely indexing large codebases](https://cursor.com/blog/secure-codebase-indexing) ·
+[How Cursor actually indexes your codebase](https://towardsdatascience.com/how-cursor-actually-indexes-your-codebase/) *(secondary)* ·
+[How Cursor indexes codebases fast](https://read.engineerscodex.com/p/how-cursor-indexes-codebases-fast) *(secondary)*
+
 **arXiv and peer-reviewed — harness, context, verification**
+[Dive into Claude Code (2604.14228)](https://arxiv.org/abs/2604.14228) ·
 [Harness-Bench (2605.27922)](https://arxiv.org/pdf/2605.27922) ·
 [Interplay of Harness Design and Post-Training (2606.25447)](https://arxiv.org/pdf/2606.25447) ·
 [HarnessBridge (2606.12882)](https://arxiv.org/pdf/2606.12882) ·
