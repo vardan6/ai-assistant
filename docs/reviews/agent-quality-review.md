@@ -102,10 +102,13 @@ tool subset when the initial gate proves insufficient.
 | `out_of_scope` refusal | Present, but too early | conditional edge before `run_tool_loop` |
 | Bounded history / prose-only re-feed | Implemented | three-tier budget, history projection |
 | Local fast-path (smalltalk/command) | Implemented | `route_local_turn` |
-| Prompt caching (`cache_control`) | Not implemented | R2 gap → roadmap AQ-2 |
-| Progressive / on-demand schema loading | Not built | core R2 ask → roadmap AQ-4 |
-| Iteration/latency telemetry | Missing | R3 measured target → roadmap AQ-3 |
-| `langgraph` in `requirements.txt` | Missing | imported/installed, undeclared → roadmap AQ-1 |
+| Prompt caching (`cache_control`) | **Implemented** (2026-07-27) | AQ-2, commit `2a28fca` — `system_blocks_with_cache` + breakpoint on final tool schema |
+| Progressive / on-demand schema loading | **Closed, not built** | ADR 0005 chose the static schema card; AQ-4 is no longer a track |
+| Iteration/latency telemetry | **Implemented** (2026-07-27) | AQ-3, commit `76eecb9` — `tool_iteration_count`, `turn_latency_ms` |
+| `langgraph` in `requirements.txt` | **Resolved** (2026-07-27) | present in `requirements.txt` |
+
+> Rows updated 2026-07-27 from the correction proposed in
+> `docs/reviews/agent-implementation-audit.md` §5, verified at commit `d80b1cf`.
 
 ## Resolved direction (canonical: design doc)
 

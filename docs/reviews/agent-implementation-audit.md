@@ -1,19 +1,39 @@
 # Audit — agent implementation vs. modern practice
 
 Audit date: 2026-07-25 · Commit `d80b1cf` · Branch `agent-redesign`
+Re-anchored: 2026-07-27 (rubric change only; no code changed between those dates)
 
-> **Scope and boundary.** This audits the runtime against the general rubric in
-> `docs/research/ai-agent-implementation-attributes-opus-5-2026-07-25.md` (attribute IDs below
-> refer to it). It is deliberately **complementary** to
-> `docs/reviews/agent-quality-review.md`, which remains the **review-of-record
-> for agent-runtime quality**.
+> **Scope and boundary.** This audits the runtime against
+> `docs/research/ai-agent-reference-architecture-opus-5-2026-07-26.md` **§14**
+> ("RA §14") — 54 attributes. Evidence for any claim is
+> `ai-agent-evidence-base-opus-5-2026-07-26.md`, cited `[EB §n]`.
 >
-> Where that review already owns a finding, this document **points** to it and
-> does not restate or re-litigate it (§2). New findings are §3. This audit files
-> no decisions and no plan — forward work belongs in `roadmap.md`.
+> This document reports **status only**. Scope and targets are
+> `docs/requirements/agent-attributes.md`; sequencing is `roadmap.md`.
 >
-> One correction to the review-of-record is proposed in §5: two rows of its
-> graded status matrix are now stale.
+> It is deliberately **complementary** to `docs/reviews/agent-quality-review.md`,
+> which remains the **review-of-record for agent-runtime quality**. Where that
+> review already owns a finding, this document **points** to it and does not
+> restate or re-litigate it (§2). New findings are §3.
+>
+> **Rubric change — read before comparing to an earlier copy.** This audit
+> originally used `ai-agent-implementation-attributes-opus-5-2026-07-25.md`
+> (49 attributes), now superseded and moved to `docs/archive/`. That document
+> contributed no citations to the evidence base and is no longer a valid anchor.
+> RA §14 adds five attributes and **renumbers the C series**:
+>
+> | Old ID | Old meaning | Now |
+> |---|---|---|
+> | C3 | Compaction | **C4** (structured compaction) |
+> | C4 | Stable cacheable prefix | **C5** |
+> | C5 | Just-in-time retrieval | **C6** |
+> | C6 | Curated, revisable tool exposure | **C7** |
+>
+> New attributes: **C3** tool-result clearing · **C8** hybrid retrieval ·
+> **E7** side-effect ledger · **G6** warm infrastructure · **I5** containment
+> over prompting. All IDs below are RA §14 IDs. Findings N1–N12 are unchanged in
+> substance; only their attribute references were remapped. The five new
+> attributes are assessed in §3a.
 
 ---
 
@@ -36,15 +56,22 @@ AR-2…AR-5. This audit does not re-file it.
 
 | Category | Score | Comment |
 |---|---|---|
-| A. Evaluation | ●●●●○ | Independent oracle + trajectory assertions; A4 and A5 absent |
+| A. Evaluation | ●●●○○ | Oracle + trajectory assertions are excellent; A3, A4, A5 absent |
 | B. Tools | ●●●●○ | Structured, bounded, errors-as-data, validated |
-| C. Context | ●●●○○ | History budgeted rigorously; in-loop growth unbounded |
+| C. Context | ●●○○○ | History budgeted rigorously; in-loop growth unbounded; no clearing (C3) |
 | D. Control flow | ●●○○○ | Known; owned by review-of-record, tracked AR-2…AR-5 |
 | E. Reliability | ●○○○○ | **Nothing.** No retry, no timeout, no cancellation |
 | F. Observability | ●●●○○ | Good per-stage attribution; no IDs, no persistence |
 | G. Cost | ●●●○○ | Caching landed; no enforcement, no result cache, no parallelism |
 | H. Discipline | ●●○○○ | Per-question branches are the dominant issue |
-| I. Safety | ●●●●● | Read-only tools over trusted CSVs — correctly minimal |
+| I. Safety | ●●●●● | Read-only tools over trusted CSVs — correctly minimal; I5 satisfied by construction |
+
+Two scores moved on re-anchoring, both because the rubric grew rather than
+because code changed. **A** dropped: A3 (CI regression gates) was not separately
+assessed originally and is absent — there is no `.github/workflows`, and the
+replay suite runs only by hand via `run-case-replay.sh`. **C** dropped: the new
+C3 (tool-result clearing) is absent, and RA §13 ranks it *ahead* of compaction
+as the primary context mechanism `[EB §2.2]`.
 
 ---
 
@@ -57,7 +84,7 @@ forward work in `roadmap.md`.
 | Rubric | Issue | Owner |
 |---|---|---|
 | D1, D2 | Graph is a strict DAG; loop does not own the decisions | review-of-record F1 → AR-3/AR-5 |
-| C6, D2 | `_select_tool_names` is a pre-loop gate, not a revisable prior | F2 → **AR-3** |
+| C7, D2 | `_select_tool_names` is a pre-loop gate, not a revisable prior | F2 → **AR-3** |
 | D2 | `out_of_scope` refusal fires before evidence gathering | F3 → **AR-2** |
 | H2 (partial) | Phrase-matched `follow_up` special-casing | F4/F5 → **AR-4** |
 | — | Graph recompiled per request | F7 → **AR-5** |
@@ -207,6 +234,39 @@ exists only for the replay harness, the harness should adapt instead.
 
 ---
 
+## 3a. The five attributes new in RA §14
+
+Assessed at the same commit. Only C3 produces a finding of consequence.
+
+### N13 — No tool-result clearing (C3) · **High**
+
+The single most load-bearing addition in the new rubric, and absent. Nothing in
+`app/ai/` drops or replaces stale tool output once it has entered the loop's
+message list — the only `.clear()` in the AI path is `evict_model_cache`
+(`provider_registry.py:37`), which is unrelated.
+
+This matters more than its novelty suggests. Dropping stale tool output measured
+both **cheaper and better** than retaining full context `[EB §2.2]`, and RA §13
+resolves a source disagreement in its favor, ranking clearing *ahead* of
+compaction as the primary mechanism. Stale context is not neutral ballast.
+
+Closely related to N2 but not the same: N2 asks for a **ceiling** on the
+accumulating list; N13 asks that superseded entries be **removed** below that
+ceiling. Doing only N2 caps the damage; doing N13 avoids it. They should land
+together, and after AR-3 — which widens tool exposure mid-loop and therefore
+increases exactly what needs clearing.
+
+### The other four
+
+| Attribute | State | Assessment |
+|---|---|---|
+| **C8** hybrid retrieval | ●●○○○ | No retrieval layer exists — tools are structured queries over nine in-memory CSVs. Correct for the product; scoped as Learning-class in `agent-attributes.md`. Not a finding. |
+| **E7** side-effect ledger | ●○○○○ | No side effects exist to record. Unimplementable without a fixture. Not a finding. |
+| **G6** warm infrastructure | ●●●●○ | Largely satisfied already: `PandasDataSource._load` eager-loads and validates every CSV at construction (`pandas_source.py:45`), and `provider_registry` caches model handles. No cold-start path in the request. |
+| **I5** containment over prompting | ●●●●● | Satisfied **by construction**. The read-only tool surface is containment in exactly the sense `[EB §10.2]` recommends — capability limited rather than behavior requested. Worth stating explicitly so a later slice does not trade it away for flexibility without noticing. |
+
+---
+
 ## 4. What is genuinely strong
 
 Not padding — these are the attributes most agent projects lack, and they should
@@ -225,7 +285,7 @@ transcript fixtures. Most teams never build this.
 exception and returns errors as data; argument validation against the handler's
 real Python signature with actionable messages for unknown args.
 
-**C4/G1 — prompt caching is correctly applied.** `system_blocks_with_cache` plus
+**C5/G1 — prompt caching is correctly applied.** `system_blocks_with_cache` plus
 a breakpoint on the final tool schema, with registry-ordered tool lists keeping
 the prefix stable. ADR 0005's choice to keep the static schema card preserves
 that prefix — the right call for cache economics.
@@ -258,13 +318,59 @@ that no longer match the code as of `d80b1cf`:
 A third row, "`langgraph` in `requirements.txt` — Missing", is also resolved:
 `langgraph` is present in `requirements.txt`.
 
-Since that document is the review-of-record, the correction should be made
-there rather than left as a note here. Flagged, not applied — it is not this
-audit's document to edit.
+**Applied 2026-07-27.** All three rows are corrected in
+`docs/reviews/agent-quality-review.md`, which carries a dated note pointing back
+here. This section is retained as the provenance of that edit.
 
 ---
 
-## 6. Sequencing observation
+## 6. Triage — effort, risk, value
+
+Input to `roadmap.md`, which owns sequencing. **Effort** is implementation size
+(S ≤ half a session · M ≈ one session · L > one session). **Risk** is the chance
+of breaking working behavior. **Value** is production value in this project —
+learning value is scored separately in `docs/requirements/agent-attributes.md`,
+because the two diverge sharply here.
+
+| # | Finding | Attr | Effort | Risk | Value | Note |
+|---|---|---|---|---|---|---|
+| N1 | No retry / timeout / backoff | E1–E3 | S | **Low** | **High** | Best ratio in the codebase. Additive, no behavior change on the happy path. |
+| N5 | No parallel tool execution | G5 | S | Low | Med | Pure reads over in-memory pandas. Wall-clock only, no token cost. |
+| N10 | No correlation IDs / traces | F1, F2 | S | Low | High | Additive. Unlocks offline failure analysis, which every later slice benefits from. |
+| N11 | `TurnKind` declared twice | H1 | S | Low | Low | Fold into AR-4, which already touches `turn_router.py`. |
+| N8 | Prose-parsing for intent | H3 | M | Low | High | Removes a full repair round-trip. Providers solve this natively. |
+| N6 | No tool result cache | G4 | M | Low | Med | Either build it or correct `docs/design/architecture.md`, which asserts it exists. |
+| N9 | Cost measured, never enforced | G2 | M | Low | Med | Telemetry is already accurate; only the ceiling is missing. |
+| N7 | No cancellation | E5 | M | Med | Med | Touches the streaming path. |
+| N2 | In-loop context budget | C1, C2 | M | Med | High | **More urgent after AR-3.** |
+| N13 | No tool-result clearing | C3 | M | Med | High | Land with N2, after AR-3. |
+| N4 | Reconciliation verdict unsound | H4, D3 | M | **Med-high** | High | User-visible on disputes. Needs typed field-addressed claims, not a numeric bag. |
+| N12 | Runtime reflection per turn | H1 | S | Med | Low | Risk is in the replay harness coupling, not the code. |
+| N3 | Per-question Python | H2, A4 | **L** | **High** | **High** | Gated by its own measurement step — see below. |
+
+**Two entries are not findings but enabling work**, and both belong in the plan:
+
+| Item | Attr | Effort | Risk | Value | Note |
+|---|---|---|---|---|---|
+| A3 · CI regression gates | A3 | S | Low | High | No `.github/workflows` today. Cheap, and makes every other slice's regression claim automatic rather than manual. |
+| S-class fixture tool | B6, E6, E7, I3, I4 | M | Med | — | Enabling slice for six Synthetic attributes. Gated off by default, excluded from Gate scoring. Zero production value by design. |
+
+### The ordering constraint that dominates
+
+**N3's measurement step gates the honesty of every number above.** Running the
+replay suite with the override layer disabled establishes the true capability
+baseline. Until that exists, A4 is violated: the eval overstates the agent, so
+any "value" claimed for a slice is measured against an inflated baseline, and an
+AR slice that genuinely improves the agent may show no movement because the
+override layer was already supplying the score.
+
+It is effort **S** — a flag and two recorded numbers — and it is separable from
+the **L**-effort removal of the overrides themselves. Do the measurement first;
+schedule the removal on its own.
+
+---
+
+## 7. Sequencing observation
 
 Not a plan — `roadmap.md` owns sequencing. One observation on ordering:
 
@@ -272,8 +378,9 @@ Not a plan — `roadmap.md` owns sequencing. One observation on ordering:
 track** and touch only `agent_loop.py`. They could land at any point without
 interacting with AR-2…AR-5.
 
-**N2 (in-loop context budget) becomes more urgent after AR-3**, which widens
-tool exposure mid-loop and therefore increases accumulated tool output.
+**N2 (in-loop context budget) and N13 (tool-result clearing) become more urgent
+after AR-3**, which widens tool exposure mid-loop and therefore increases both
+the accumulated tool output and the amount of it that goes stale.
 
 **N3's measurement step — running the replay suite with overrides disabled — is
 worth doing before AR-2/AR-3**, because it establishes the true capability

@@ -4,6 +4,11 @@
 > itself. Complements `pipeline.md` (what the assistant answers) by stating *how
 > well* the agent must reason. Decision rationale lives in
 > `docs/adr/0002` (tool gating), `0003` (schema card), and `0004` (LangGraph ReAct).
+>
+> **This document owns priority (R1 > R2 > R3).** `agent-attributes.md` owns the
+> per-attribute scope and target levels derived from `docs/research/`. Where they
+> touch the same ground, priority here wins and the attribute targets there are
+> the finer-grained expression of it.
 
 ## Goal
 
